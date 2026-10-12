@@ -1,0 +1,22 @@
+{
+  "stacja-kontroli-pojazdow": {
+    "name": "Stacja kontroli pojazdów",
+    "phone": "697 500 530"
+  },
+  "myjnia-reczna": {
+    "name": "Myjnia ręczna",
+    "phone": "884 303 040"
+  },
+  "geometria-kol-3d": {
+    "name": "Geometria kół 3D",
+    "phone": "570 442 080"
+  },
+  "rejestracja-pojazdow": {
+    "name": "Rejestracja pojazdów",
+    "phone": "884 303 040"
+  },
+  "ubezpieczenia": {
+    "name": "Ubezpieczenia",
+    "phone": "884 303 040"
+  }
+}
