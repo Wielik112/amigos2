@@ -1,0 +1,17 @@
+{
+  "name": "amigos-staweccy",
+  "private": true,
+  "description": "Strona Amigos Staweccy z systemem rezerwacji i panelem admina",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "dev": "node scripts/dev-server.js",
+    "migrate": "node scripts/migrate.js",
+    "seed": "node scripts/seed.js",
+    "generate": "python3 src/build.py",
+    "test": "node --test --test-concurrency=1 test/*.test.js"
+  },
+  "dependencies": {
+    "pg": "^8.16.0",
+    "stripe": "^18.5.0"
+  }
+}

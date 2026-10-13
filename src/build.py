@@ -83,6 +83,7 @@ ICONS = {
     "parking": '<rect x="4" y="3" width="16" height="18" rx="3"/><path d="M9.5 16.5v-9h3.2a2.8 2.8 0 0 1 0 5.6H9.5"/>',
     "calendar": '<rect x="3.5" y="5" width="17" height="15.5" rx="2"/><path d="M3.5 9.5h17M8 3v4M16 3v4"/>',
     "chev": '<path d="m9 5 7 7-7 7"/>',
+    "bell": '<path d="M6 16.5V11a6 6 0 0 1 12 0v5.5l1.5 2h-15z"/><path d="M10 20.5a2.2 2.2 0 0 0 4 0"/>',
     "menu": '<path d="M4 7h16M4 12h16M4 17h16"/>',
     "close": '<path d="M6 6l12 12M18 6 6 18"/>',
     "fb": '<path d="M14 21v-7.5h2.6l.4-3H14V8.6c0-.9.3-1.5 1.6-1.5H17V4.4c-.3 0-1.2-.1-2.3-.1-2.3 0-3.8 1.4-3.8 3.9v2.3H8.3v3h2.6V21"/>',
@@ -97,7 +98,8 @@ def icon(name, cls="ic"):
 # ---------------------------------------------------------------------------
 # USŁUGI – kolejność jak na budynku (od lewej)
 # ---------------------------------------------------------------------------
-CONTACT_NOTE = "Termin potwierdzamy telefonicznie w godzinach pracy – zwykle tego samego dnia."
+CONTACT_NOTE = "Widzisz tylko wolne godziny – termin rezerwujesz od razu. Jeśli usługa wymaga zaliczki, zapłacisz ją online (BLIK lub karta)."
+CALLBACK_NOTE = "Oddzwonimy w wybranym terminie – zwykle tego samego dnia w godzinach pracy."
 
 SERVICES = [
     {
@@ -125,7 +127,7 @@ SERVICES = [
             "Przy instalacji LPG/CNG – dokument z aktualną legalizacją zbiornika.",
             "Pojazd z czytelnym numerem VIN i sprawnymi światłami – to sprawdzamy na początku.",
         ],
-        "price_note": "Opłaty za badania techniczne są ustalone przepisami i takie same na każdej stacji w Polsce. Dokładną kwotę dla Twojego pojazdu podamy przy potwierdzeniu terminu.",
+        "price_note": "Opłaty za badania techniczne są ustalone przepisami i takie same na każdej stacji w Polsce. Dokładną kwotę dla Twojego pojazdu podamy na miejscu.",
         "faq": [
             ("Czy muszę się umawiać na przegląd?", "Nie musisz – przyjmujemy też bez rezerwacji. Z zarezerwowaną godziną wiesz jednak, kiedy zostaniesz obsłużony, i nie czekasz na swoją kolej."),
             ("Ile trwa badanie techniczne?", "Zwykle około pół godziny. Badanie pojazdu sprowadzonego z zagranicy lub z instalacją gazową trwa dłużej."),
@@ -169,13 +171,13 @@ SERVICES = [
         ],
         "bring_title": "Dobrze wiedzieć",
         "bring": [
-            "Czas i cena zależą od wielkości i stanu auta – podamy je przy potwierdzeniu rezerwacji.",
+            "Czas i cena zależą od wielkości i stanu auta – podamy je na miejscu.",
             "Przed czyszczeniem wnętrza wyjmij z auta rzeczy osobiste i foteliki.",
             "Podczas mycia możesz zrobić przegląd albo załatwić ubezpieczenie w biurze obok.",
         ],
         "price_note": "",
         "faq": [
-            ("Ile trwa czyszczenie wnętrza?", "To zależy od stanu auta – od godziny przy odświeżeniu do kilku godzin przy pełnym czyszczeniu. Dokładny czas podamy przy potwierdzeniu."),
+            ("Ile trwa czyszczenie wnętrza?", "To zależy od stanu auta – od godziny przy odświeżeniu do kilku godzin przy pełnym czyszczeniu. Dokładny czas podamy na miejscu."),
             ("Czy mogę zostawić auto i odebrać je później?", "Tak. Zadzwonimy, gdy samochód będzie gotowy do odbioru."),
             ("Czy myjecie busy i auta dostawcze?", "Tak – zaznacz typ pojazdu w formularzu, żebyśmy zaplanowali odpowiednio dużo czasu."),
         ],
@@ -398,6 +400,7 @@ def render_form(s, uid=None):
     form = s["form"]
     phone = PHONES[s["phone"]][0]
     fields = "".join(render_field(f, sid) for f in form["fields"])
+    has_slot = any(f["type"] == "slot" for f in form["fields"])
     return f'''<form class="bform" action="/api/zapis" method="post" novalidate data-form data-done="{form["done"]}" data-phone="{phone}">
 <input type="hidden" name="usluga" value="{s["slug"]}">
 <input type="hidden" name="ts" value="" data-ts>
@@ -411,7 +414,7 @@ def render_form(s, uid=None):
 <div class="fld fld--consent"><label class="check"><input type="checkbox" name="zgoda" value="tak" required><span>Zgadzam się na kontakt w sprawie tego zgłoszenia. Dane przetwarzamy zgodnie z <a href="/polityka-prywatnosci">polityką prywatności</a>.</span></label><p class="fld__err" aria-live="polite"></p></div>
 <div class="bform__foot">
 <button class="btn btn--red btn--lg" type="submit"><span>{form["cta"]}</span></button>
-<p class="bform__note">{icon("phone", "ic ic--sm")} {CONTACT_NOTE} Wolisz zadzwonić? <a href="tel:{tel(phone)}">{phone}</a></p>
+<p class="bform__note">{icon("phone", "ic ic--sm")} {CONTACT_NOTE if has_slot else CALLBACK_NOTE} Wolisz zadzwonić? <a href="tel:{tel(phone)}">{phone}</a></p>
 </div>
 <p class="bform__msg" role="alert" hidden></p>
 </form>'''
@@ -672,6 +675,17 @@ def _asset_version():
 VERSION = _asset_version()
 
 
+def _admin_version():
+    h = hashlib.sha256()
+    for rel in ("assets/css/style.css", "assets/css/admin.css", "assets/js/admin.js"):
+        with open(os.path.join(ROOT, rel), "rb") as fh:
+            h.update(fh.read())
+    return h.hexdigest()[:10]
+
+
+ADMIN_VERSION = _admin_version()
+
+
 def breadcrumbs_ld(items):
     return {"@context": "https://schema.org", "@type": "BreadcrumbList", "itemListElement": [
         {"@type": "ListItem", "position": i + 1, "name": n, "item": SITE_URL + u} for i, (n, u) in enumerate(items)]}
@@ -741,7 +755,7 @@ def location_block(h="h2"):
 # ---------------------------------------------------------------------------
 HOME_FAQ = [
     ("Czy mogę załatwić kilka spraw podczas jednej wizyty?", "Tak – po to jesteśmy pod jednym adresem. Możesz np. zrobić przegląd i w tym czasie umyć auto albo zarejestrować samochód i od razu wykupić OC."),
-    ("Czy rezerwacja online jest wiążąca?", "Wysłanie formularza to zgłoszenie. Termin staje się pewny, gdy potwierdzimy go telefonicznie – zwykle tego samego dnia w godzinach pracy."),
+    ("Czy rezerwacja online jest wiążąca?", "Tak. W formularzu widzisz tylko wolne godziny, a wybrany termin od razu rezerwujemy dla Ciebie. Jeśli usługa wymaga zaliczki, rezerwacja staje się ostateczna po wpłacie online (BLIK lub karta) – na wpłatę masz kilkanaście minut i w tym czasie nikt inny nie zajmie tej godziny."),
     ("Gdzie zaparkować?", "Na miejscu jest parking. Wjazd od ulicy Moniuszki."),
     ("Czy obsługujecie auta z zagranicy?", "Tak. Na miejscu zrobisz pierwsze badanie techniczne, a w biurze przygotujemy tłumaczenia, akcyzę, PCC-3, rejestrację i ubezpieczenie."),
     ("Jak odwołać lub przełożyć wizytę?", f"Zadzwoń pod numer {MAIN_PHONE} albo bezpośrednio do działu, w którym masz termin."),
@@ -792,8 +806,8 @@ def build_home():
 <div class="sec__head"><h2 class="h2" id="how-h">Rezerwacja w trzech krokach</h2></div>
 <ol class="steps">
 <li><b>Wybierz usługę</b><span>Formularz pyta tylko o to, czego potrzebujemy do danej sprawy.</span></li>
-<li><b>Podaj termin i telefon</b><span>Wybierz dzień i godzinę w czasie, gdy jesteśmy otwarci.</span></li>
-<li><b>Potwierdzamy telefonicznie</b><span>Oddzwaniamy, zwykle tego samego dnia, i termin jest Twój.</span></li>
+<li><b>Wybierz termin i podaj telefon</b><span>Pokazujemy tylko wolne dni i godziny.</span></li>
+<li><b>Potwierdź rezerwację</b><span>Przy usługach z zaliczką płacisz online (BLIK lub karta) – i termin jest Twój.</span></li>
 </ol>
 </div>
 </section>
@@ -886,12 +900,12 @@ def build_uslugi():
 
 
 def build_rezerwacja():
-    body = simple_hero("Rezerwacja online", "Wybierz usługę, dzień i godzinę. Oddzwonimy, żeby potwierdzić termin.", []) + f'''
+    body = simple_hero("Rezerwacja online", "Wybierz usługę, dzień i wolną godzinę – termin rezerwujesz od razu online.", []) + f'''
 <section class="sec sec--book sec--tight"><div class="wrap">{booking_widget("h2", "Wybierz usługę", "Formularz dopasuje się do sprawy – zajmie Ci to mniej niż minutę.")}</div></section>
 <section class="sec sec--paper"><div class="wrap">
 <ol class="steps">
-<li><b>Wysyłasz zgłoszenie</b><span>Termin w formularzu to Twoja propozycja.</span></li>
-<li><b>Oddzwaniamy</b><span>Zwykle tego samego dnia, w godzinach pracy.</span></li>
+<li><b>Wybierasz wolny termin</b><span>Godzina jest od razu zarezerwowana dla Ciebie.</span></li>
+<li><b>Wpłacasz zaliczkę</b><span>Jeśli usługa jej wymaga – online, BLIK-iem lub kartą.</span></li>
 <li><b>Przyjeżdżasz</b><span>{STREET}, {ACCESS.lower()}.</span></li>
 </ol></div></section>'''
     return page("rezerwacja", "Rezerwacja online – umów wizytę | Amigos Staweccy Nowa Sól",
@@ -923,7 +937,7 @@ def build_privacy():
 <h2>Jak długo przechowujemy dane</h2>
 <p>Dane ze zgłoszenia przechowujemy do czasu jego obsługi, a jeśli dojdzie do wykonania usługi – przez okres wymagany przepisami podatkowymi i rachunkowymi. Zgłoszenia, które nie zakończyły się wizytą, usuwamy najpóźniej po 12 miesiącach.</p>
 <h2>Komu przekazujemy dane</h2>
-<p>Dane mogą trafić do dostawców usług technicznych, z których korzystamy do działania strony i poczty (hosting, wysyłka e-maili), wyłącznie w zakresie niezbędnym do obsługi zgłoszenia. W sprawach rejestracji pojazdów i ubezpieczeń dane przekazujemy urzędom lub towarzystwom ubezpieczeniowym tylko wtedy, gdy zlecisz nam taką sprawę.</p>
+<p>Dane mogą trafić do dostawców usług technicznych, z których korzystamy do działania strony i poczty (hosting, wysyłka e-maili), wyłącznie w zakresie niezbędnym do obsługi zgłoszenia. Jeśli usługa wymaga zaliczki, płatność online obsługuje operator płatności Stripe – przekazujemy mu kwotę, nazwę usługi, termin i (jeśli go podasz) adres e-mail. W sprawach rejestracji pojazdów i ubezpieczeń dane przekazujemy urzędom lub towarzystwom ubezpieczeniowym tylko wtedy, gdy zlecisz nam taką sprawę.</p>
 <h2>Twoje prawa</h2>
 <p>Masz prawo dostępu do swoich danych, ich sprostowania, usunięcia, ograniczenia przetwarzania, przeniesienia oraz sprzeciwu. Możesz też złożyć skargę do Prezesa Urzędu Ochrony Danych Osobowych.</p>
 <h2>Pliki cookies i mapy</h2>
@@ -937,9 +951,172 @@ def build_thanks():
     body = f'''<section class="phero phero--simple phero--center">
 <div class="wrap wrap--narrow"><div class="thanks__ic">{icon("check", "ic ic--xl")}</div>
 <h1 class="phero__h">Zgłoszenie wysłane</h1>
-<p class="phero__lead">Oddzwonimy, żeby potwierdzić termin – zwykle tego samego dnia w godzinach pracy. W pilnej sprawie zadzwoń: <a href="tel:{tel(MAIN_PHONE)}">{MAIN_PHONE}</a>.</p>
+<p class="phero__lead">Dziękujemy – otrzymaliśmy Twoje zgłoszenie. W pilnej sprawie zadzwoń: <a href="tel:{tel(MAIN_PHONE)}">{MAIN_PHONE}</a>.</p>
 <div class="hero__cta hero__cta--center"><a class="btn btn--red btn--lg" href="/">Wróć na stronę główną</a></div></div></section>'''
     return page("dziekujemy", "Zgłoszenie wysłane | Amigos Staweccy", "Dziękujemy za zgłoszenie.", body, "", noindex=True)
+
+
+def result_card(inner):
+    return f'''<section class="sec sec--tight"><div class="wrap wrap--narrow"><div class="sidecard"><div class="done">
+{inner}
+</div></div></div></section>'''
+
+
+def build_confirmation():
+    body = f'''<section class="phero phero--simple phero--center">
+<div class="wrap wrap--narrow" data-booking-status>
+<div class="thanks__ic" data-bs-ok hidden>{icon("check", "ic ic--xl")}</div>
+<h1 class="phero__h" data-bs-title>Sprawdzamy rezerwację…</h1>
+<p class="phero__lead" data-bs-lead>Chwileczkę – czekamy na potwierdzenie płatności.</p>
+</div></section>
+''' + result_card(f'''<dl data-bs-details hidden></dl>
+<p>Masz pytanie albo plany się zmieniły? Zadzwoń: <a href="tel:{tel(MAIN_PHONE)}">{MAIN_PHONE}</a>.</p>
+<a class="btn btn--ghost" href="/">Wróć na stronę główną</a>''')
+    return page("potwierdzenie", "Rezerwacja | Amigos Staweccy", "Status Twojej rezerwacji.", body, "", noindex=True)
+
+
+def build_payment_failed():
+    body = f'''<section class="phero phero--simple phero--center">
+<div class="wrap wrap--narrow" data-booking-failed>
+<h1 class="phero__h" data-bf-title>Rezerwacja nie została opłacona</h1>
+<p class="phero__lead" data-bf-lead>Czas na wpłatę zaliczki minął, więc termin wrócił do puli.</p>
+</div></section>
+''' + result_card(f'''<p>Możesz wybrać nowy termin – zajmie to minutę. Wolisz zadzwonić? <a href="tel:{tel(MAIN_PHONE)}">{MAIN_PHONE}</a></p>
+<a class="btn btn--red btn--lg" href="/rezerwacja" data-bf-again>Wybierz nowy termin</a>''')
+    return page("platnosc-nieudana", "Płatność nieudana | Amigos Staweccy", "Rezerwacja nie została opłacona.", body, "", noindex=True)
+
+
+def build_mock_payment():
+    body = f'''<section class="phero phero--simple phero--center">
+<div class="wrap wrap--narrow">
+<h1 class="phero__h">Płatność testowa</h1>
+<p class="phero__lead">To symulacja płatności – nie pobieramy żadnych pieniędzy. Po włączeniu prawdziwych płatności w tym miejscu otworzy się bezpieczna strona płatności (BLIK lub karta).</p>
+</div></section>
+''' + result_card('''<dl data-mp-details hidden></dl>
+<p data-mp-timer>Wczytuję dane płatności…</p>
+<div class="hero__cta" data-mock-pay><button class="btn btn--red btn--lg" type="button" data-mp-pay disabled><span>Zapłać (symulacja)</span></button><button class="btn btn--ghost btn--lg" type="button" data-mp-cancel disabled>Anuluj</button></div>
+<p class="bform__msg" role="alert" hidden data-mp-msg></p>''')
+    return page("platnosc/mock", "Płatność testowa | Amigos Staweccy", "Symulacja płatności zaliczki.", body, "", noindex=True)
+
+
+def build_admin():
+    """Panel rezerwacji (/admin) – osobny szablon, ale te same tokeny i komponenty co landing."""
+    brand = ('<a class="brand" href="/admin"><img src="/assets/img/logo-96.webp" width="42" height="42" alt="">'
+             '<span class="brand__txt"><b>Amigos Staweccy</b><small>Panel rezerwacji</small></span></a>')
+    days = "".join(f'<label class="chip"><input type="checkbox" name="dni" value="{i}"{" checked" if i < 7 else ""}><span>{d}</span></label>'
+                   for i, d in enumerate(["Pn", "Wt", "Śr", "Cz", "Pt", "Sb", "Nd"], 1))
+    html = f'''<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Panel rezerwacji | {BRAND}</title>
+<meta name="robots" content="noindex, nofollow">
+<meta name="theme-color" content="#061a40">
+<link rel="icon" href="/favicon.ico" sizes="48x48">
+<link rel="icon" href="/assets/img/favicon-32.png" type="image/png" sizes="32x32">
+<link rel="preload" href="/assets/fonts/archivo-latin-wdth-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/assets/css/style.css?v={VERSION}">
+<link rel="stylesheet" href="/assets/css/admin.css?v={ADMIN_VERSION}">
+<script src="/assets/js/admin.js?v={ADMIN_VERSION}" defer></script>
+</head>
+<body class="adm">
+
+<div class="adm-login" data-view="login" hidden>
+<form class="bform adm-card adm-login__card" data-login novalidate>
+{brand}
+<h1 class="h3">Zaloguj się</h1>
+<div class="fld"><label for="l-login">Login</label><input id="l-login" type="text" name="login" autocomplete="username" required maxlength="60"></div>
+<div class="fld"><label for="l-pass">Hasło</label><input id="l-pass" type="password" name="haslo" autocomplete="current-password" required maxlength="200"></div>
+<button class="btn btn--red btn--lg btn--block" type="submit"><span>Zaloguj</span></button>
+<p class="bform__msg" role="alert" hidden data-login-msg></p>
+</form>
+</div>
+
+<div data-view="app" hidden>
+<header class="hdr adm-hdr"><div class="wrap hdr__in">
+{brand}
+<nav class="adm-nav" aria-label="Panel"><a href="#rezerwacje" data-nav="rezerwacje">Rezerwacje</a><a href="#grafik" data-nav="grafik">Grafik</a><a href="#uslugi" data-nav="uslugi">Usługi</a></nav>
+<div class="adm-hdr__end">
+<div class="adm-bell">
+<button class="adm-bell__btn" type="button" aria-expanded="false" aria-label="Powiadomienia" data-bell>{icon("bell")}<span class="adm-bell__n" data-bell-n hidden>0</span></button>
+<div class="adm-pop" data-bell-pop hidden><div class="adm-pop__head"><b>Powiadomienia</b><button class="adm-link" type="button" data-bell-all>Oznacz wszystkie jako przeczytane</button></div><ul data-bell-list></ul></div>
+</div>
+<span class="adm-user" data-user></span>
+<button class="btn btn--ghost" type="button" data-logout>Wyloguj</button>
+</div>
+</div></header>
+<p class="adm-mode" data-mode hidden>Płatności w trybie testowym (mock) – zaliczki są symulowane, nikt nie płaci prawdziwych pieniędzy.</p>
+
+<main class="adm-main"><div class="wrap">
+
+<section data-panel="rezerwacje" aria-labelledby="h-rez">
+<div class="adm-head"><h1 class="h2" id="h-rez">Rezerwacje</h1></div>
+<div class="tabs" role="tablist" aria-label="Usługa" data-svc-tabs></div>
+<form class="bform adm-card adm-filters" data-filters>
+<div class="fld"><label for="f-od">Od</label><input id="f-od" type="date" name="od"></div>
+<div class="fld"><label for="f-do">Do <span class="opt">opcjonalnie</span></label><input id="f-do" type="date" name="do"></div>
+<div class="fld"><label for="f-st">Status</label><select id="f-st" name="status"><option value="">Wszystkie</option><option value="confirmed">Potwierdzone</option><option value="pending_payment">Czekają na płatność</option><option value="cancelled">Anulowane</option><option value="expired">Wygasłe</option></select></div>
+<div class="adm-actions"><button class="btn btn--blue" type="submit">Pokaż</button><button class="btn btn--ghost" type="button" data-upcoming>Nadchodzące</button></div>
+</form>
+<div class="adm-card adm-card--flush"><div class="adm-scroll"><table class="adm-table">
+<thead><tr><th>Data i godzina</th><th>Usługa</th><th>Klient</th><th>Telefon</th><th>Status</th><th>Płatność</th></tr></thead>
+<tbody data-bookings></tbody></table></div><p class="adm-empty" data-bookings-empty hidden>Brak rezerwacji dla wybranych filtrów.</p></div>
+</section>
+
+<section data-panel="grafik" aria-labelledby="h-graf" hidden>
+<div class="adm-head"><h1 class="h2" id="h-graf">Grafik i terminy</h1>
+<form class="bform" data-graf-svc><div class="fld"><label for="g-svc">Usługa</label><select id="g-svc" name="usluga"></select></div></form></div>
+<div class="adm-grid2">
+<div class="adm-card">
+<div class="adm-week__nav"><button class="btn btn--ghost" type="button" data-week="-1" aria-label="Poprzedni tydzień">‹ Poprzedni</button><b data-week-label></b><button class="btn btn--ghost" type="button" data-week="1" aria-label="Następny tydzień">Następny ›</button></div>
+<div class="adm-week" data-week-grid></div>
+<div class="adm-legend"><span><i></i>wolny</span><span><i class="is-held"></i>czeka na płatność</span><span><i class="is-booked"></i>zarezerwowany</span><span><i class="is-blocked"></i>zablokowany</span><span>Kliknij sloty, żeby je zaznaczyć.</span></div>
+<div class="adm-sel" data-sel hidden><span data-sel-n></span><button class="btn btn--red" type="button" data-sel-act="block">Zablokuj</button><button class="btn btn--ghost" type="button" data-sel-act="unblock">Odblokuj</button><button class="btn btn--ghost" type="button" data-sel-act="delete">Usuń</button><button class="adm-link" type="button" data-sel-act="clear">Odznacz</button></div>
+</div>
+<form class="bform adm-card" data-gen novalidate>
+<h2>Generator slotów</h2>
+<div class="row2"><div class="fld"><label for="gen-od">Od dnia</label><input id="gen-od" type="date" name="od" required></div><div class="fld"><label for="gen-do">Do dnia</label><input id="gen-do" type="date" name="do" required></div></div>
+<fieldset class="fld"><legend>Dni tygodnia</legend><div class="chips">{days}</div></fieldset>
+<div class="row2"><div class="fld"><label for="gen-god">Godzina od</label><input id="gen-god" type="time" name="godzinaOd" value="08:00" required></div><div class="fld"><label for="gen-gdo">Godzina do</label><input id="gen-gdo" type="time" name="godzinaDo" value="20:00" required></div></div>
+<div class="row2"><div class="fld"><label for="gen-len">Długość slotu (min)</label><input id="gen-len" type="number" name="dlugosc" min="5" max="480" step="5" value="30" required></div><div class="fld"><label for="gen-cap">Pojemność</label><input id="gen-cap" type="number" name="pojemnosc" min="1" max="50" value="1" required></div></div>
+<p class="fld__hint">Istniejące sloty zostają bez zmian – generator dodaje tylko brakujące. Godziny w czasie polskim.</p>
+<button class="btn btn--red" type="submit">Generuj sloty</button>
+<p class="adm-msg" data-gen-msg aria-live="polite"></p>
+</form>
+</div>
+</section>
+
+<section data-panel="uslugi" aria-labelledby="h-usl" hidden>
+<div class="adm-head"><h1 class="h2" id="h-usl">Ustawienia usług</h1><p>Zmiany działają od razu dla nowych rezerwacji.</p></div>
+<div class="adm-svcs" data-services></div>
+</section>
+
+</div></main>
+
+<dialog class="adm-dlg" data-dlg-booking aria-labelledby="dlg-b-h"><div class="adm-dlg__in">
+<div class="adm-dlg__head"><h2 id="dlg-b-h" data-b-title>Rezerwacja</h2><button class="adm-x" type="button" data-close aria-label="Zamknij">×</button></div>
+<div data-b-body></div>
+<div class="adm-actions"><button class="btn btn--red" type="button" data-b-cancel hidden>Anuluj rezerwację</button><button class="btn btn--ghost" type="button" data-close>Zamknij</button></div>
+</div></dialog>
+
+<dialog class="adm-dlg" data-dlg-cancel aria-labelledby="dlg-c-h"><form class="bform adm-dlg__in" method="dialog" data-cancel-form>
+<div class="adm-dlg__head"><h2 id="dlg-c-h">Anulować rezerwację?</h2><button class="adm-x" type="button" data-close aria-label="Zamknij">×</button></div>
+<p data-c-who></p>
+<div class="fld"><label for="c-reason">Powód <span class="opt">opcjonalnie</span></label><textarea id="c-reason" name="powod" maxlength="300" rows="3"></textarea></div>
+<p class="adm-note" data-c-refund hidden></p>
+<div class="adm-actions"><button class="btn btn--red" type="submit" value="ok">Tak, anuluj rezerwację</button><button class="btn btn--ghost" type="button" data-close>Nie</button></div>
+<p class="bform__msg" role="alert" hidden data-c-msg></p>
+</form></dialog>
+
+<div class="adm-toasts" data-toasts aria-live="polite"></div>
+</div>
+</body>
+</html>
+'''
+    os.makedirs(os.path.join(ROOT, "admin"), exist_ok=True)
+    write("admin/index.html", html)
+    return "admin/index"
 
 
 def build_404():
@@ -960,29 +1137,48 @@ def write(name, content):
         fh.write(content)
 
 
+NOINDEX_PAGES = ("404", "dziekujemy", "potwierdzenie", "platnosc-nieudana", "platnosc/mock")
+
+
 def build_meta(paths):
     today = date.today().isoformat()
     prio = {"index": "1.0", "rezerwacja": "0.9", "kontakt": "0.8", "uslugi/index": "0.8", "polityka-prywatnosci": "0.2"}
     urls = "".join(
         f"<url><loc>{SITE_URL}{'/' if p == 'index' else '/' + p.removesuffix('/index')}</loc><lastmod>{today}</lastmod>"
         f"<priority>{prio.get(p, '0.9')}</priority></url>\n"
-        for p in paths if p not in ("404", "dziekujemy"))
+        for p in paths if p not in NOINDEX_PAGES)
     write("sitemap.xml", f'<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n{urls}</urlset>\n')
-    write("robots.txt", f"User-agent: *\nAllow: /\nDisallow: /api/\n\nSitemap: {SITE_URL}/sitemap.xml\n")
+    write("robots.txt", f"User-agent: *\nAllow: /\nDisallow: /api/\nDisallow: /admin\nDisallow: /platnosc\n\nSitemap: {SITE_URL}/sitemap.xml\n")
     write("site.webmanifest", json.dumps({
         "name": BRAND, "short_name": "Amigos", "lang": "pl", "start_url": "/", "display": "standalone",
         "background_color": "#061a40", "theme_color": "#061a40",
         "icons": [{"src": "/assets/img/icon-192.png", "sizes": "192x192", "type": "image/png"},
                   {"src": "/assets/img/icon-512.png", "sizes": "512x512", "type": "image/png"}]},
         ensure_ascii=False, indent=2))
-    # konfiguracja dla API (lista usług, nazwy) – używana przez api/zapis.js
+    # konfiguracja dla API (usługi, nazwy, pola formularzy, godziny) – używana przez api/zapis.js,
+    # walidację pól `details` rezerwacji i seed bazy
     os.makedirs(os.path.join(ROOT, "api"), exist_ok=True)
     write("api/_uslugi.json", json.dumps(
-        {s["slug"]: {"name": s["name"], "phone": PHONES[s["phone"]][0]} for s in SERVICES}, ensure_ascii=False, indent=2))
+        {s["slug"]: {"name": s["name"], "phone": PHONES[s["phone"]][0], **api_form_schema(s)} for s in SERVICES},
+        ensure_ascii=False, indent=2))
+
+
+def api_form_schema(s):
+    fields, slots = [], False
+    for f in s["form"]["fields"]:
+        for x in f["items"] if f["type"] == "row" else [f]:
+            if x["type"] == "slot":
+                slots = True
+                continue
+            fields.append({k: x[k] for k in ("name", "type", "req", "opts") if k in x})
+    return {"slots": slots, "fields": fields,
+            "hours": {str(d): [o, c] for n, d, o, c in HOURS if o}, "slotMinutes": SLOT_MINUTES}
 
 
 if __name__ == "__main__":
-    out = [build_home(), build_uslugi(), build_rezerwacja(), build_kontakt(), build_privacy(), build_thanks(), build_404()]
+    out = [build_home(), build_uslugi(), build_rezerwacja(), build_kontakt(), build_privacy(), build_thanks(), build_404(),
+           build_confirmation(), build_payment_failed(), build_mock_payment()]
     out += [build_service(s) for s in SERVICES]
     build_meta(out)
+    build_admin()
     print("Zbudowano:", ", ".join(out))

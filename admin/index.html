@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Panel rezerwacji | Amigos Staweccy</title>
+<meta name="robots" content="noindex, nofollow">
+<meta name="theme-color" content="#061a40">
+<link rel="icon" href="/favicon.ico" sizes="48x48">
+<link rel="icon" href="/assets/img/favicon-32.png" type="image/png" sizes="32x32">
+<link rel="preload" href="/assets/fonts/archivo-latin-wdth-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/assets/css/style.css?v=7fffa6d536">
+<link rel="stylesheet" href="/assets/css/admin.css?v=7700cf4f49">
+<script src="/assets/js/admin.js?v=7700cf4f49" defer></script>
+</head>
+<body class="adm">
+
+<div class="adm-login" data-view="login" hidden>
+<form class="bform adm-card adm-login__card" data-login novalidate>
+<a class="brand" href="/admin"><img src="/assets/img/logo-96.webp" width="42" height="42" alt=""><span class="brand__txt"><b>Amigos Staweccy</b><small>Panel rezerwacji</small></span></a>
+<h1 class="h3">Zaloguj się</h1>
+<div class="fld"><label for="l-login">Login</label><input id="l-login" type="text" name="login" autocomplete="username" required maxlength="60"></div>
+<div class="fld"><label for="l-pass">Hasło</label><input id="l-pass" type="password" name="haslo" autocomplete="current-password" required maxlength="200"></div>
+<button class="btn btn--red btn--lg btn--block" type="submit"><span>Zaloguj</span></button>
+<p class="bform__msg" role="alert" hidden data-login-msg></p>
+</form>
+</div>
+
+<div data-view="app" hidden>
+<header class="hdr adm-hdr"><div class="wrap hdr__in">
+<a class="brand" href="/admin"><img src="/assets/img/logo-96.webp" width="42" height="42" alt=""><span class="brand__txt"><b>Amigos Staweccy</b><small>Panel rezerwacji</small></span></a>
+<nav class="adm-nav" aria-label="Panel"><a href="#rezerwacje" data-nav="rezerwacje">Rezerwacje</a><a href="#grafik" data-nav="grafik">Grafik</a><a href="#uslugi" data-nav="uslugi">Usługi</a></nav>
+<div class="adm-hdr__end">
+<div class="adm-bell">
+<button class="adm-bell__btn" type="button" aria-expanded="false" aria-label="Powiadomienia" data-bell><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 16.5V11a6 6 0 0 1 12 0v5.5l1.5 2h-15z"/><path d="M10 20.5a2.2 2.2 0 0 0 4 0"/></svg><span class="adm-bell__n" data-bell-n hidden>0</span></button>
+<div class="adm-pop" data-bell-pop hidden><div class="adm-pop__head"><b>Powiadomienia</b><button class="adm-link" type="button" data-bell-all>Oznacz wszystkie jako przeczytane</button></div><ul data-bell-list></ul></div>
+</div>
+<span class="adm-user" data-user></span>
+<button class="btn btn--ghost" type="button" data-logout>Wyloguj</button>
+</div>
+</div></header>
+<p class="adm-mode" data-mode hidden>Płatności w trybie testowym (mock) – zaliczki są symulowane, nikt nie płaci prawdziwych pieniędzy.</p>
+
+<main class="adm-main"><div class="wrap">
+
+<section data-panel="rezerwacje" aria-labelledby="h-rez">
+<div class="adm-head"><h1 class="h2" id="h-rez">Rezerwacje</h1></div>
+<div class="tabs" role="tablist" aria-label="Usługa" data-svc-tabs></div>
+<form class="bform adm-card adm-filters" data-filters>
+<div class="fld"><label for="f-od">Od</label><input id="f-od" type="date" name="od"></div>
+<div class="fld"><label for="f-do">Do <span class="opt">opcjonalnie</span></label><input id="f-do" type="date" name="do"></div>
+<div class="fld"><label for="f-st">Status</label><select id="f-st" name="status"><option value="">Wszystkie</option><option value="confirmed">Potwierdzone</option><option value="pending_payment">Czekają na płatność</option><option value="cancelled">Anulowane</option><option value="expired">Wygasłe</option></select></div>
+<div class="adm-actions"><button class="btn btn--blue" type="submit">Pokaż</button><button class="btn btn--ghost" type="button" data-upcoming>Nadchodzące</button></div>
+</form>
+<div class="adm-card adm-card--flush"><div class="adm-scroll"><table class="adm-table">
+<thead><tr><th>Data i godzina</th><th>Usługa</th><th>Klient</th><th>Telefon</th><th>Status</th><th>Płatność</th></tr></thead>
+<tbody data-bookings></tbody></table></div><p class="adm-empty" data-bookings-empty hidden>Brak rezerwacji dla wybranych filtrów.</p></div>
+</section>
+
+<section data-panel="grafik" aria-labelledby="h-graf" hidden>
+<div class="adm-head"><h1 class="h2" id="h-graf">Grafik i terminy</h1>
+<form class="bform" data-graf-svc><div class="fld"><label for="g-svc">Usługa</label><select id="g-svc" name="usluga"></select></div></form></div>
+<div class="adm-grid2">
+<div class="adm-card">
+<div class="adm-week__nav"><button class="btn btn--ghost" type="button" data-week="-1" aria-label="Poprzedni tydzień">‹ Poprzedni</button><b data-week-label></b><button class="btn btn--ghost" type="button" data-week="1" aria-label="Następny tydzień">Następny ›</button></div>
+<div class="adm-week" data-week-grid></div>
+<div class="adm-legend"><span><i></i>wolny</span><span><i class="is-held"></i>czeka na płatność</span><span><i class="is-booked"></i>zarezerwowany</span><span><i class="is-blocked"></i>zablokowany</span><span>Kliknij sloty, żeby je zaznaczyć.</span></div>
+<div class="adm-sel" data-sel hidden><span data-sel-n></span><button class="btn btn--red" type="button" data-sel-act="block">Zablokuj</button><button class="btn btn--ghost" type="button" data-sel-act="unblock">Odblokuj</button><button class="btn btn--ghost" type="button" data-sel-act="delete">Usuń</button><button class="adm-link" type="button" data-sel-act="clear">Odznacz</button></div>
+</div>
+<form class="bform adm-card" data-gen novalidate>
+<h2>Generator slotów</h2>
+<div class="row2"><div class="fld"><label for="gen-od">Od dnia</label><input id="gen-od" type="date" name="od" required></div><div class="fld"><label for="gen-do">Do dnia</label><input id="gen-do" type="date" name="do" required></div></div>
+<fieldset class="fld"><legend>Dni tygodnia</legend><div class="chips"><label class="chip"><input type="checkbox" name="dni" value="1" checked><span>Pn</span></label><label class="chip"><input type="checkbox" name="dni" value="2" checked><span>Wt</span></label><label class="chip"><input type="checkbox" name="dni" value="3" checked><span>Śr</span></label><label class="chip"><input type="checkbox" name="dni" value="4" checked><span>Cz</span></label><label class="chip"><input type="checkbox" name="dni" value="5" checked><span>Pt</span></label><label class="chip"><input type="checkbox" name="dni" value="6" checked><span>Sb</span></label><label class="chip"><input type="checkbox" name="dni" value="7"><span>Nd</span></label></div></fieldset>
+<div class="row2"><div class="fld"><label for="gen-god">Godzina od</label><input id="gen-god" type="time" name="godzinaOd" value="08:00" required></div><div class="fld"><label for="gen-gdo">Godzina do</label><input id="gen-gdo" type="time" name="godzinaDo" value="20:00" required></div></div>
+<div class="row2"><div class="fld"><label for="gen-len">Długość slotu (min)</label><input id="gen-len" type="number" name="dlugosc" min="5" max="480" step="5" value="30" required></div><div class="fld"><label for="gen-cap">Pojemność</label><input id="gen-cap" type="number" name="pojemnosc" min="1" max="50" value="1" required></div></div>
+<p class="fld__hint">Istniejące sloty zostają bez zmian – generator dodaje tylko brakujące. Godziny w czasie polskim.</p>
+<button class="btn btn--red" type="submit">Generuj sloty</button>
+<p class="adm-msg" data-gen-msg aria-live="polite"></p>
+</form>
+</div>
+</section>
+
+<section data-panel="uslugi" aria-labelledby="h-usl" hidden>
+<div class="adm-head"><h1 class="h2" id="h-usl">Ustawienia usług</h1><p>Zmiany działają od razu dla nowych rezerwacji.</p></div>
+<div class="adm-svcs" data-services></div>
+</section>
+
+</div></main>
+
+<dialog class="adm-dlg" data-dlg-booking aria-labelledby="dlg-b-h"><div class="adm-dlg__in">
+<div class="adm-dlg__head"><h2 id="dlg-b-h" data-b-title>Rezerwacja</h2><button class="adm-x" type="button" data-close aria-label="Zamknij">×</button></div>
+<div data-b-body></div>
+<div class="adm-actions"><button class="btn btn--red" type="button" data-b-cancel hidden>Anuluj rezerwację</button><button class="btn btn--ghost" type="button" data-close>Zamknij</button></div>
+</div></dialog>
+
+<dialog class="adm-dlg" data-dlg-cancel aria-labelledby="dlg-c-h"><form class="bform adm-dlg__in" method="dialog" data-cancel-form>
+<div class="adm-dlg__head"><h2 id="dlg-c-h">Anulować rezerwację?</h2><button class="adm-x" type="button" data-close aria-label="Zamknij">×</button></div>
+<p data-c-who></p>
+<div class="fld"><label for="c-reason">Powód <span class="opt">opcjonalnie</span></label><textarea id="c-reason" name="powod" maxlength="300" rows="3"></textarea></div>
+<p class="adm-note" data-c-refund hidden></p>
+<div class="adm-actions"><button class="btn btn--red" type="submit" value="ok">Tak, anuluj rezerwację</button><button class="btn btn--ghost" type="button" data-close>Nie</button></div>
+<p class="bform__msg" role="alert" hidden data-c-msg></p>
+</form></dialog>
+
+<div class="adm-toasts" data-toasts aria-live="polite"></div>
+</div>
+</body>
+</html>

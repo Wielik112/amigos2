@@ -1,5 +1,7 @@
 User-agent: *
 Allow: /
 Disallow: /api/
+Disallow: /admin
+Disallow: /platnosc
 
 Sitemap: https://amigoscar.pl/sitemap.xml

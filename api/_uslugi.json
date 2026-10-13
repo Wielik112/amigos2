@@ -1,22 +1,319 @@
 {
   "stacja-kontroli-pojazdow": {
     "name": "Stacja kontroli pojazdów",
-    "phone": "697 500 530"
+    "phone": "697 500 530",
+    "slots": true,
+    "fields": [
+      {
+        "name": "pojazd",
+        "type": "chips",
+        "req": true,
+        "opts": [
+          "Osobowy",
+          "Osobowy z LPG",
+          "Dostawczy do 3,5 t",
+          "Motocykl / motorower",
+          "Przyczepa",
+          "Inny"
+        ]
+      },
+      {
+        "name": "badanie",
+        "type": "chips",
+        "req": true,
+        "opts": [
+          "Okresowe",
+          "Pierwsze – pojazd z zagranicy",
+          "Dodatkowe",
+          "Nie wiem, doradźcie"
+        ]
+      },
+      {
+        "name": "marka",
+        "type": "text"
+      },
+      {
+        "name": "rejestracja",
+        "type": "text"
+      }
+    ],
+    "hours": {
+      "1": [
+        "08:00",
+        "20:00"
+      ],
+      "2": [
+        "09:00",
+        "19:00"
+      ],
+      "3": [
+        "08:00",
+        "20:00"
+      ],
+      "4": [
+        "08:00",
+        "20:00"
+      ],
+      "5": [
+        "08:00",
+        "20:00"
+      ],
+      "6": [
+        "08:00",
+        "14:00"
+      ]
+    },
+    "slotMinutes": 30
   },
   "myjnia-reczna": {
     "name": "Myjnia ręczna",
-    "phone": "884 303 040"
+    "phone": "884 303 040",
+    "slots": true,
+    "fields": [
+      {
+        "name": "pakiet",
+        "type": "chips",
+        "req": true,
+        "opts": [
+          "Mycie ręczne nadwozia",
+          "Mycie z odkurzaniem",
+          "Czyszczenie wnętrza",
+          "Pakiet komplet",
+          "Doradźcie mi"
+        ]
+      },
+      {
+        "name": "pojazd",
+        "type": "chips",
+        "req": true,
+        "opts": [
+          "Osobowy",
+          "SUV / kombi",
+          "Bus / dostawczy"
+        ]
+      }
+    ],
+    "hours": {
+      "1": [
+        "08:00",
+        "20:00"
+      ],
+      "2": [
+        "09:00",
+        "19:00"
+      ],
+      "3": [
+        "08:00",
+        "20:00"
+      ],
+      "4": [
+        "08:00",
+        "20:00"
+      ],
+      "5": [
+        "08:00",
+        "20:00"
+      ],
+      "6": [
+        "08:00",
+        "14:00"
+      ]
+    },
+    "slotMinutes": 30
   },
   "geometria-kol-3d": {
     "name": "Geometria kół 3D",
-    "phone": "570 442 080"
+    "phone": "570 442 080",
+    "slots": true,
+    "fields": [
+      {
+        "name": "pojazd",
+        "type": "chips",
+        "req": true,
+        "opts": [
+          "Osobowy",
+          "SUV",
+          "BMW / Mercedes",
+          "Bus"
+        ]
+      },
+      {
+        "name": "zakres",
+        "type": "chips",
+        "req": true,
+        "opts": [
+          "Sam pomiar",
+          "Zbieżność przód",
+          "Geometria przód",
+          "Geometria całego auta",
+          "Nie wiem, doradźcie"
+        ]
+      },
+      {
+        "name": "dodatkowo",
+        "type": "checks",
+        "opts": [
+          "Kalibracja kąta skrętu",
+          "Diagnostyka komputerowa"
+        ]
+      },
+      {
+        "name": "marka",
+        "type": "text"
+      },
+      {
+        "name": "problem",
+        "type": "textarea"
+      }
+    ],
+    "hours": {
+      "1": [
+        "08:00",
+        "20:00"
+      ],
+      "2": [
+        "09:00",
+        "19:00"
+      ],
+      "3": [
+        "08:00",
+        "20:00"
+      ],
+      "4": [
+        "08:00",
+        "20:00"
+      ],
+      "5": [
+        "08:00",
+        "20:00"
+      ],
+      "6": [
+        "08:00",
+        "14:00"
+      ]
+    },
+    "slotMinutes": 30
   },
   "rejestracja-pojazdow": {
     "name": "Rejestracja pojazdów",
-    "phone": "884 303 040"
+    "phone": "884 303 040",
+    "slots": true,
+    "fields": [
+      {
+        "name": "sprawa",
+        "type": "chips",
+        "req": true,
+        "opts": [
+          "Pierwsza rejestracja w Polsce",
+          "Przerejestrowanie",
+          "Auto z zagranicy",
+          "Akcyza / PCC-3",
+          "Tłumaczenie dokumentów",
+          "Inna sprawa"
+        ]
+      },
+      {
+        "name": "opis",
+        "type": "textarea"
+      }
+    ],
+    "hours": {
+      "1": [
+        "08:00",
+        "20:00"
+      ],
+      "2": [
+        "09:00",
+        "19:00"
+      ],
+      "3": [
+        "08:00",
+        "20:00"
+      ],
+      "4": [
+        "08:00",
+        "20:00"
+      ],
+      "5": [
+        "08:00",
+        "20:00"
+      ],
+      "6": [
+        "08:00",
+        "14:00"
+      ]
+    },
+    "slotMinutes": 30
   },
   "ubezpieczenia": {
     "name": "Ubezpieczenia",
-    "phone": "884 303 040"
+    "phone": "884 303 040",
+    "slots": false,
+    "fields": [
+      {
+        "name": "ubezpieczenie",
+        "type": "chips",
+        "req": true,
+        "opts": [
+          "OC / AC samochodu",
+          "Dom / mieszkanie",
+          "Na życie",
+          "Dla firmy",
+          "Turystyczne",
+          "Inne"
+        ]
+      },
+      {
+        "name": "polisa",
+        "type": "chips",
+        "req": true,
+        "opts": [
+          "Nowa polisa",
+          "Przedłużenie",
+          "Porównanie z obecną"
+        ]
+      },
+      {
+        "name": "data",
+        "type": "date"
+      },
+      {
+        "name": "pora",
+        "type": "select",
+        "opts": [
+          "Obojętnie",
+          "Rano",
+          "W południe",
+          "Po południu"
+        ]
+      }
+    ],
+    "hours": {
+      "1": [
+        "08:00",
+        "20:00"
+      ],
+      "2": [
+        "09:00",
+        "19:00"
+      ],
+      "3": [
+        "08:00",
+        "20:00"
+      ],
+      "4": [
+        "08:00",
+        "20:00"
+      ],
+      "5": [
+        "08:00",
+        "20:00"
+      ],
+      "6": [
+        "08:00",
+        "14:00"
+      ]
+    },
+    "slotMinutes": 30
   }
 }
