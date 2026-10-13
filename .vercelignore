@@ -1,0 +1,6 @@
+# nie trafia na serwer (README: generator nie jest publikowany)
+src/
+test/
+scripts/
+.env
+.env.*

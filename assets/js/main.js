@@ -14,14 +14,12 @@
     return { ymd, minutes: +g("hour") * 60 + +g("minute"), dow: new Date(ymd + "T12:00:00Z").getUTCDay() };
   };
   const toMin = (hhmm) => { const [h, m] = hhmm.split(":").map(Number); return h * 60 + m; };
-  const fmt = (min) => `${String(Math.floor(min / 60)).padStart(2, "0")}:${String(min % 60).padStart(2, "0")}`;
   const addDays = (ymd, n) => { const d = new Date(ymd + "T12:00:00Z"); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
   const dowOf = (ymd) => new Date(ymd + "T12:00:00Z").getUTCDay();
   const plDate = (ymd) => new Date(ymd + "T12:00:00Z").toLocaleDateString("pl-PL", { weekday: "long", day: "numeric", month: "long", timeZone: "UTC" });
 
   let HOURS = {};
   try { HOURS = JSON.parse(body.dataset.hours || "{}"); } catch (e) { HOURS = {}; }
-  const SLOT = +body.dataset.slot || 30;
   const AHEAD = +body.dataset.ahead || 60;
   const now = nowPL();
 
@@ -212,16 +210,19 @@
     consent: "Zaznacz zgodę, żebyśmy mogli oddzwonić.",
   };
 
-  const slotsFor = (ymd) => {
-    const h = HOURS[dowOf(ymd)];
-    if (!h) return [];
-    let start = toMin(h[0]);
-    const end = toMin(h[1]) - SLOT;
-    if (ymd === now.ymd) start = Math.max(start, Math.ceil((now.minutes + 60) / SLOT) * SLOT);
-    const out = [];
-    for (let m = start; m <= end; m += SLOT) out.push(fmt(m));
-    return out;
+  // Wolne godziny z systemu rezerwacji (cache na dzień; po „termin zajęty” pobieramy od nowa)
+  const slotCache = new Map();
+  const fetchSlots = (slug, ymd, fresh) => {
+    const key = slug + "|" + ymd;
+    if (!fresh && slotCache.has(key)) return slotCache.get(key);
+    const p = fetch(`/api/terminy?usluga=${encodeURIComponent(slug)}&dzien=${ymd}`, { headers: { Accept: "application/json" } })
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+      .then((j) => (j.terminy || []).map((t) => t.godzina));
+    slotCache.set(key, p);
+    p.catch(() => slotCache.delete(key));
+    return p;
   };
+  const MSG_NO_SLOTS = "Brak wolnych terminów tego dnia – wybierz inny dzień.";
 
   const setErr = (wrap, msg) => {
     if (!wrap) return;
@@ -243,17 +244,33 @@
 
     const dateInp = $("[data-date]:not([data-optional])", form);
     const slotSel = $("[data-slots]", form);
-    const fillSlots = () => {
+    const slug = ($('input[name="usluga"]', form) || {}).value || "";
+    let known = null;   // wolne godziny wybranego dnia (null = jeszcze nie wiemy)
+    let seq = 0;
+    const fillSlots = async (fresh) => {
       if (!dateInp || !slotSel) return;
       const v = dateInp.value;
       const prev = slotSel.value;
+      const my = ++seq;
+      known = null;
       slotSel.replaceChildren();
       const add = (val, label) => { const o = document.createElement("option"); o.value = val; o.textContent = label; slotSel.append(o); return o; };
-      if (!v) { add("", "Najpierw wybierz dzień"); slotSel.disabled = true; return; }
-      const list = slotsFor(v);
+      if (!v || v < now.ymd || v > addDays(now.ymd, AHEAD)) { add("", "Najpierw wybierz dzień"); slotSel.disabled = true; return; }
+      add("", "Sprawdzam wolne godziny…");
+      slotSel.disabled = true;
+      let list;
+      try { list = await fetchSlots(slug, v, fresh); } catch (e) {
+        if (my !== seq) return;
+        slotSel.replaceChildren(); add("", "Nie udało się pobrać godzin – wybierz dzień ponownie");
+        return;
+      }
+      if (my !== seq) return;
+      known = list;
+      slotSel.replaceChildren();
       if (!list.length) {
         add("", dowOf(v) === 0 ? "Niedziela – zamknięte" : "Brak wolnych godzin tego dnia");
         slotSel.disabled = true;
+        validateDate(dateInp);
         return;
       }
       slotSel.disabled = false;
@@ -269,8 +286,9 @@
       if (!v) { setErr(wrap, inp.required ? MSG.date : ""); return !inp.required; }
       if (v < now.ymd) { setErr(wrap, MSG.past); return false; }
       if (v > addDays(now.ymd, AHEAD)) { setErr(wrap, MSG.far); return false; }
-      if (!HOURS[dowOf(v)]) { setErr(wrap, MSG.sunday); return false; }
-      if (!inp.hasAttribute("data-optional") && !slotsFor(v).length) { setErr(wrap, "Dziś nie zdążymy – wybierz jutro lub kolejny dzień."); return false; }
+      const optional = inp.hasAttribute("data-optional");
+      if (optional && !HOURS[dowOf(v)]) { setErr(wrap, MSG.sunday); return false; }
+      if (!optional && inp === dateInp && known && !known.length) { setErr(wrap, dowOf(v) === 0 ? MSG.sunday : MSG_NO_SLOTS); return false; }
       setErr(wrap, "");
       return true;
     };
@@ -361,7 +379,24 @@
         });
         clearTimeout(timer);
         const json = await res.json().catch(() => ({}));
-        if (!res.ok || !json.ok) throw new Error(json.error || "Nie udało się wysłać zgłoszenia.");
+        if (!res.ok || !json.ok) {
+          if (res.status === 409 && slotSel) {
+            // termin zajęty w międzyczasie – odświeżamy listę godzin i wskazujemy pole
+            setErr(slotSel.closest(".fld"), json.error || "Ten termin właśnie został zajęty.");
+            fillSlots(true).then(() => setErr(slotSel.closest(".fld"), json.error || "Ten termin właśnie został zajęty."));
+            slotSel.focus({ preventScroll: true });
+          }
+          if (res.status === 422 && Array.isArray(json.fields)) {
+            json.fields.forEach((n) => { const el = $(`[name="${n}"],[name="${n}[]"]`, form); if (el) setErr(el.closest(".fld"), "Sprawdź to pole."); });
+          }
+          throw new Error(json.error || "Nie udało się wysłać zgłoszenia.");
+        }
+        if (json.redirectUrl) {
+          // zaliczka: przechodzimy do płatności (termin jest wstrzymany na czas płatności)
+          btn.innerHTML = '<span class="spin" aria-hidden="true"></span><span>Przechodzę do płatności…</span>';
+          location.assign(json.redirectUrl);
+          return;
+        }
         btn.disabled = false;
         btn.innerHTML = label;
         showDone(form, data);
@@ -389,7 +424,7 @@
     box.innerHTML = `
       <div class="done__ic"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg></div>
       <h3>${esc(form.dataset.done || "Zgłoszenie wysłane")}</h3>
-      <p>Dziękujemy${d.imie ? ", " + esc(d.imie) : ""}! Oddzwonimy, żeby potwierdzić szczegóły – zwykle tego samego dnia w godzinach pracy.</p>
+      <p>Dziękujemy${d.imie ? ", " + esc(d.imie) : ""}! ${d.godzina ? "Termin jest zarezerwowany – do zobaczenia przy Garbarskiej 2. Jeśli plany się zmienią, zadzwoń do nas." : "Oddzwonimy w wybranym terminie – zwykle tego samego dnia w godzinach pracy."}</p>
       <dl>${rows.map(([k, v]) => `<dt>${k}</dt><dd>${esc(v)}</dd>`).join("")}</dl>
       <button type="button" class="btn btn--ghost">Wyślij kolejne zgłoszenie</button>`;
     form.hidden = true;
@@ -398,10 +433,130 @@
     box.scrollIntoView({ block: "center", behavior: "smooth" });
     $("button", box).addEventListener("click", () => {
       form.reset();
+      slotCache.clear();
       $$("[data-slots]", form).forEach((s) => { s.replaceChildren(new Option("Najpierw wybierz dzień", "")); s.disabled = true; });
       const ts = $("[data-ts]", form); if (ts) ts.value = String(Date.now());
       box.remove();
       form.hidden = false;
     });
+  }
+
+  /* ---------- Rezerwacja: potwierdzenie, płatność nieudana, płatność testowa ---------- */
+  const qs = new URLSearchParams(location.search);
+  const zl = (gr) => (gr / 100).toLocaleString("pl-PL", { style: "currency", currency: "PLN" });
+  const termText = (r) => (r.data ? `${plDate(r.data)}${r.godzina ? ", " + r.godzina : ""}` : "");
+  const fillDl = (dl, rows) => {
+    dl.replaceChildren();
+    rows.filter((r) => r[1]).forEach(([k, v]) => {
+      const dt = document.createElement("dt"); dt.textContent = k;
+      const dd = document.createElement("dd"); dd.textContent = v;
+      dl.append(dt, dd);
+    });
+    dl.hidden = false;
+  };
+  const getJson = (url, opts = {}) =>
+    fetch(url, { ...opts, headers: { Accept: "application/json", ...(opts.body ? { "Content-Type": "application/json" } : {}) } })
+      .then((r) => r.json().catch(() => ({})).then((j) => ({ ok: r.ok && j.ok !== false, j })))
+      .catch(() => ({ ok: false, j: {} }));
+
+  const bs = $("[data-booking-status]");
+  if (bs) {
+    const id = qs.get("id");
+    const title = $("[data-bs-title]"), lead = $("[data-bs-lead]"), dl = $("[data-bs-details]");
+    const started = Date.now();
+    const tick = async () => {
+      const { ok, j } = id ? await getJson(`/api/platnosc/status?id=${encodeURIComponent(id)}`) : { ok: false, j: {} };
+      const r = j.rezerwacja;
+      if (!ok || !r) {
+        if (id && Date.now() - started < 30000) { setTimeout(tick, 3000); return; }
+        title.textContent = "Nie znaleziono rezerwacji";
+        lead.textContent = "Link jest niepełny albo nieaktualny. Zadzwoń do nas – sprawdzimy rezerwację.";
+        return;
+      }
+      if (r.status === "expired" || r.status === "cancelled") {
+        location.replace(`/platnosc-nieudana?id=${encodeURIComponent(id)}&powod=${r.status === "cancelled" ? "anulowano" : "czas"}`);
+        return;
+      }
+      const when = r.kontakt
+        ? (r.data ? plDate(r.data) : "najszybciej, jak się da") + (r.pora && r.pora !== "Obojętnie" ? ", " + r.pora.toLowerCase() : "")
+        : termText(r);
+      fillDl(dl, [["Usługa", r.usluga], [r.kontakt ? "Kontakt" : "Termin", when],
+        ["Zaliczka", r.platnosc ? `${zl(r.platnosc.kwota)} – ${r.platnosc.status === "succeeded" ? "opłacona" : "czeka na potwierdzenie"}` : ""]]);
+      if (r.status === "confirmed") {
+        $("[data-bs-ok]").hidden = false;
+        title.textContent = r.kontakt ? "Zgłoszenie przyjęte" : "Rezerwacja potwierdzona";
+        lead.textContent = r.kontakt
+          ? "Oddzwonimy w wybranym terminie – zwykle tego samego dnia w godzinach pracy."
+          : `Dziękujemy${r.imie ? ", " + r.imie : ""}! Termin jest Twój – do zobaczenia przy Garbarskiej 2.`;
+        return;
+      }
+      // pending_payment: potwierdzenie przychodzi webhookiem, więc może dotrzeć chwilę po powrocie z płatności
+      if (Date.now() - started > 120000) {
+        title.textContent = "Płatność w trakcie";
+        lead.textContent = "Nie mamy jeszcze potwierdzenia z systemu płatności. Odśwież stronę za chwilę albo zadzwoń do nas.";
+        return;
+      }
+      setTimeout(tick, 2500);
+    };
+    tick();
+  }
+
+  const bf = $("[data-booking-failed]");
+  if (bf) {
+    const id = qs.get("id");
+    if (qs.get("powod") === "anulowano") {
+      $("[data-bf-title]").textContent = "Płatność anulowana";
+      $("[data-bf-lead]").textContent = "Rezerwacja nie została opłacona, więc termin wrócił do puli.";
+    }
+    if (id) {
+      // rezygnacja na stronie płatności: zamykamy płatność, żeby termin od razu wrócił do puli
+      const cancel = qs.get("powod") === "anulowano" ? getJson("/api/platnosc/anuluj", { method: "POST", body: JSON.stringify({ id }) }) : Promise.resolve();
+      cancel.then(() => getJson(`/api/platnosc/status?id=${encodeURIComponent(id)}`)).then(({ j }) => {
+        const r = j.rezerwacja;
+        if (!r) return;
+        if (r.status === "confirmed") { location.replace(`/potwierdzenie?id=${encodeURIComponent(id)}`); return; }
+        if (r.slug) $("[data-bf-again]").href = `/rezerwacja?usluga=${encodeURIComponent(r.slug)}`;
+      });
+    }
+  }
+
+  const mp = $("[data-mock-pay]");
+  if (mp) {
+    const pid = location.pathname.split("/").pop();
+    const dl = $("[data-mp-details]"), timer = $("[data-mp-timer]"), msg = $("[data-mp-msg]");
+    const pay = $("[data-mp-pay]"), cancel = $("[data-mp-cancel]");
+    let until = 0, iv = null;
+    const fail = (text) => { msg.textContent = text; msg.hidden = false; };
+    const countdown = () => {
+      const left = Math.max(0, Math.round((until - Date.now()) / 1000));
+      timer.textContent = left
+        ? `Termin czeka na wpłatę jeszcze ${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")} min.`
+        : "Czas na wpłatę minął – termin wrócił do puli.";
+      if (!left) { clearInterval(iv); pay.disabled = true; }
+    };
+    getJson(`/api/platnosc/info?id=${encodeURIComponent(pid)}`).then(({ ok, j }) => {
+      const p = j.platnosc;
+      if (!ok || !p) { timer.textContent = ""; fail(j.error || "Nie znaleziono płatności."); return; }
+      fillDl(dl, [["Usługa", p.usluga], ["Termin", termText(p)], ["Zaliczka", zl(p.kwota)]]);
+      if (p.status === "succeeded") { location.replace(`/potwierdzenie?id=${encodeURIComponent(p.rezerwacja)}`); return; }
+      if (p.status !== "pending") { location.replace(`/platnosc-nieudana?id=${encodeURIComponent(p.rezerwacja)}&powod=czas`); return; }
+      until = Date.parse(p.holdDo);
+      countdown();
+      iv = setInterval(countdown, 1000);
+      pay.disabled = cancel.disabled = false;
+    });
+    const send = async (wynik, btn) => {
+      pay.disabled = cancel.disabled = true;
+      msg.hidden = true;
+      const label = btn.innerHTML;
+      btn.innerHTML = '<span class="spin" aria-hidden="true"></span><span>Chwileczkę…</span>';
+      const { ok, j } = await getJson("/api/platnosc/mock", { method: "POST", body: JSON.stringify({ paymentId: pid, wynik }) });
+      if (ok && j.next) { location.assign(j.next); return; }
+      btn.innerHTML = label;
+      pay.disabled = cancel.disabled = false;
+      fail(j.error || "Nie udało się. Spróbuj ponownie.");
+    };
+    pay.addEventListener("click", () => send("zaplac", pay));
+    cancel.addEventListener("click", () => send("anuluj", cancel));
   }
 })();
