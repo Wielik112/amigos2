@@ -10,6 +10,7 @@ siedzą w tym jednym pliku. Zmieniasz dane -> uruchamiasz:
 i wszystkie pliki .html, sitemap.xml itd. generują się na nowo w katalogu głównym.
 Nie potrzeba żadnych bibliotek – sam Python 3.8+.
 """
+import hashlib
 import json
 import os
 from datetime import date
@@ -659,7 +660,16 @@ def page(path, title, desc, body, active="", ld=None, noindex=False):
     return path
 
 
-VERSION = date.today().strftime("%Y%m%d")
+def _asset_version():
+    """Skrót z zawartości CSS i JS – każda zmiana pliku wymusza pobranie nowej wersji (pliki w /assets są cache'owane na rok)."""
+    h = hashlib.sha256()
+    for rel in ("assets/css/style.css", "assets/js/main.js"):
+        with open(os.path.join(ROOT, rel), "rb") as fh:
+            h.update(fh.read())
+    return h.hexdigest()[:10]
+
+
+VERSION = _asset_version()
 
 
 def breadcrumbs_ld(items):
