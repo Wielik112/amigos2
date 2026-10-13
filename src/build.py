@@ -471,6 +471,52 @@ def facade():
 </div>'''
 
 
+def facade_mobile():
+    """Węższy budynek na telefony: wszystkie bramy widać naraz, a bramy po kolei się otwierają."""
+    bays = []
+    for i, s in enumerate(SERVICES):
+        x = 30 + i * 120
+        cx = x + 50
+        bays.append(f'''<a class="mbay" href="/uslugi/{s["slug"]}" aria-label="{s["name"]}" data-mbay="{i}">
+<clipPath id="mcl{i}"><rect x="{x}" y="128" width="100" height="150"/></clipPath>
+<rect class="bay__in" fill="url(#mglow)" x="{x}" y="128" width="100" height="150"/>
+<g transform="translate({cx - 20} 158)"><g class="bay__ic" transform="scale(1.66)">{ICONS[s["icon"]]}</g></g>
+<text class="mbay__go" x="{cx}" y="248" text-anchor="middle">Zobacz</text>
+<g clip-path="url(#mcl{i})"><g class="mdoor"><rect x="{x}" y="128" width="100" height="150" fill="url(#mslats)"/><rect x="{x}" y="268" width="100" height="10" class="door__lip"/></g></g>
+<rect class="bay__frame" x="{x - 3}" y="125" width="106" height="153" rx="2"/>
+<rect class="sign" x="{x - 4}" y="62" width="108" height="46" rx="4"/>
+<g transform="translate({cx - 15} 70)"><g class="msign__ic" transform="scale(1.25)">{ICONS[s["icon"]]}</g></g>
+</a>''')
+    return f'''<div class="facade facade--m" data-mfacade>
+<svg viewBox="0 0 640 312" role="group" aria-label="Budynek Amigos – wybierz usługę">
+<defs><pattern id="mslats" width="10" height="11" patternUnits="userSpaceOnUse"><rect width="10" height="11" fill="#3a4152"/><rect y="9" width="10" height="2" fill="#2d3343"/></pattern>
+<linearGradient id="mglow" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#1e74f2"/><stop offset="1" stop-color="#0a3c94"/></linearGradient></defs>
+<rect x="12" y="46" width="616" height="232" class="wall"/>
+<rect x="12" y="38" width="616" height="12" class="roof"/>
+<rect x="250" y="26" width="140" height="14" class="roof roof--back"/>
+{''.join(bays)}
+<rect x="0" y="278" width="640" height="34" class="ground"/>
+<path d="M60 296h50M240 296h50M420 296h50M580 296h40" class="lane"/>
+</svg>
+</div>'''
+
+
+def service_carousel():
+    cards = "".join(
+        f'<li class="svcar__item"><a class="svcar__card" href="/uslugi/{s["slug"]}" data-svcard="{i}">'
+        f'<span class="svcar__ic">{icon(s["icon"])}</span>'
+        f'<span class="svcar__txt"><b>{s["short"]}</b><small>{s["sign"][1]}</small></span>'
+        f'{icon("chev", "ic svcar__go")}</a></li>'
+        for i, s in enumerate(SERVICES))
+    dots = "".join(
+        f'<button type="button" class="svcar__dot" data-svdot="{i}" aria-label="{s["short"]}"></button>'
+        for i, s in enumerate(SERVICES))
+    return f'''<div class="svcar" data-svcar>
+<ul class="svcar__track" aria-label="Usługi">{cards}</ul>
+<div class="svcar__dots">{dots}</div>
+</div>'''
+
+
 # ---------------------------------------------------------------------------
 # WSPÓLNE ELEMENTY
 # ---------------------------------------------------------------------------
@@ -489,7 +535,8 @@ def phones_list():
 
 def header(active):
     links = "".join(
-        f'<li><a href="/uslugi/{s["slug"]}"{" aria-current=\"page\"" if active == s["slug"] else ""}>{s["short"]}</a></li>'
+        f'<li><a href="/uslugi/{s["slug"]}"{" aria-current=\"page\"" if active == s["slug"] else ""}>'
+        f'{icon(s["icon"], "ic nav__ic")}<span>{s["short"]}</span>{icon("chev", "ic nav__chev")}</a></li>'
         for s in SERVICES)
     kontakt_cur = ' aria-current="page"' if active == "kontakt" else ""
     return f'''<a class="skip" href="#main">Przejdź do treści</a>
@@ -497,8 +544,9 @@ def header(active):
 <div class="wrap hdr__in">
 <a class="brand" href="/" aria-label="{BRAND} – strona główna"><img src="/assets/img/logo-96.webp" width="46" height="46" alt=""><span class="brand__txt"><b>Amigos Staweccy</b><small>{CITY}, {STREET}</small></span></a>
 <nav class="nav" id="nav" aria-label="Menu główne">
-<ul class="nav__list">{links}<li><a href="/kontakt"{kontakt_cur}>Kontakt</a></li></ul>
-<div class="nav__extra"><a class="nav__tel" href="tel:{tel(MAIN_PHONE)}">{icon("phone")}{MAIN_PHONE}</a></div>
+<p class="nav__h">Usługi</p>
+<ul class="nav__list">{links}<li><a href="/kontakt"{kontakt_cur}>{icon("pin", "ic nav__ic")}<span>Kontakt</span>{icon("chev", "ic nav__chev")}</a></li></ul>
+<div class="nav__extra"><a class="btn btn--red btn--lg btn--block" href="/rezerwacja">{icon("calendar")}Umów wizytę</a><a class="btn btn--ghost btn--lg btn--block" href="tel:{tel(MAIN_PHONE)}">{icon("phone")}Zadzwoń {MAIN_PHONE}</a></div>
 </nav>
 <a class="hdr__tel" href="tel:{tel(MAIN_PHONE)}">{icon("phone")}<span>{MAIN_PHONE}</span></a>
 <a class="btn btn--red hdr__cta" href="/rezerwacja">Umów wizytę</a>
@@ -700,7 +748,6 @@ def build_home():
         f'<article class="combo"><h3 class="combo__t">{t}</h3><ol class="combo__steps">{"".join(f"<li>{x}</li>" for x in steps)}</ol>'
         f'<a class="combo__link" href="/rezerwacja?usluga={slug}">Zacznij od rezerwacji{icon("chev", "ic ic--sm")}</a></article>'
         for t, steps, slug in combos)
-    chips = "".join(f'<li><a href="/uslugi/{s["slug"]}">{icon(s["icon"], "ic ic--sm")}{s["short"]}</a></li>' for s in SERVICES)
     body = f'''<section class="hero" aria-labelledby="hero-h">
 <div class="hero__bg" aria-hidden="true"><svg viewBox="0 0 1440 700" preserveAspectRatio="xMidYMid slice"><path d="M-40 520C300 380 700 640 1480 300v420H-40z" class="sw1"/><path d="M-40 600C420 470 860 690 1480 420v300H-40z" class="sw2"/><path d="M-40 470C360 300 820 560 1480 210" class="sw3"/></svg></div>
 <div class="wrap hero__top">
@@ -716,9 +763,10 @@ def build_home():
 </ul>
 </div>
 <div class="hero__facade">
-<div class="wrap"><p class="facade__hint"><span class="on-desk">Wybierz bramę, żeby przejść do usługi</span><span class="on-touch">Przesuń budynek w bok albo wybierz usługę poniżej</span></p></div>
+<div class="wrap"><p class="facade__hint"><span class="on-desk">Wybierz bramę, żeby przejść do usługi</span><span class="on-touch">Dotknij bramy albo przesuń karty, żeby wybrać usługę</span></p></div>
 {facade()}
-<div class="hero__ground"><ul class="hero__chips wrap">{chips}</ul></div>
+{facade_mobile()}
+<div class="hero__ground">{service_carousel()}</div>
 </div>
 </section>
 
