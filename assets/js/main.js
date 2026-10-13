@@ -50,6 +50,60 @@
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") setMenu(false); });
   window.matchMedia("(min-width: 1021px)").addEventListener("change", (m) => m.matches && setMenu(false));
 
+  /* ---------- Telefon: bramy otwierają się po kolei, karuzela usług idzie razem z nimi ---------- */
+  const svcar = $("[data-svcar]");
+  if (svcar) {
+    const track = $(".svcar__track", svcar);
+    const cards = $$("[data-svcard]", svcar);
+    const dots = $$("[data-svdot]", svcar);
+    const bays = $$("[data-mbay]");
+    const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const mobile = matchMedia("(max-width: 899px)");
+    const STEP = 2600;
+    let cur = -1, timer = null, visible = true, holdUntil = 0, scrollT = null;
+
+    const centerOf = (i) => {
+      const li = cards[i].parentElement;
+      return li.offsetLeft + li.offsetWidth / 2 - track.clientWidth / 2;
+    };
+    const setActive = (i, scroll) => {
+      cur = i;
+      bays.forEach((b, k) => b.classList.toggle("is-open", k === i));
+      cards.forEach((c, k) => c.classList.toggle("is-active", k === i));
+      dots.forEach((d, k) => d.setAttribute("aria-current", String(k === i)));
+      if (scroll) track.scrollTo({ left: centerOf(i), behavior: reduced ? "auto" : "smooth" });
+    };
+    const tick = () => {
+      if (!reduced && visible && !document.hidden && mobile.matches && Date.now() >= holdUntil) setActive((cur + 1) % cards.length, true);
+    };
+    const start = () => { clearInterval(timer); if (!reduced) timer = setInterval(tick, STEP); };
+    const hold = () => { holdUntil = Date.now() + 6000; };
+
+    // Użytkownik przesunął karty – otwieramy bramę tej usługi, która jest na środku
+    track.addEventListener("scroll", () => {
+      clearTimeout(scrollT);
+      scrollT = setTimeout(() => {
+        let best = 0, dist = Infinity;
+        cards.forEach((_, k) => { const d = Math.abs(centerOf(k) - track.scrollLeft); if (d < dist) { dist = d; best = k; } });
+        if (best !== cur) setActive(best, false);
+      }, 120);
+    }, { passive: true });
+    ["pointerdown", "touchstart", "wheel"].forEach((ev) => track.addEventListener(ev, hold, { passive: true }));
+    dots.forEach((d, k) => d.addEventListener("click", () => { hold(); setActive(k, true); }));
+    bays.forEach((b, k) => {
+      b.addEventListener("focus", () => { hold(); setActive(k, true); });
+      b.addEventListener("pointerenter", () => { hold(); setActive(k, true); });
+    });
+
+    if ("IntersectionObserver" in window) {
+      new IntersectionObserver((en) => { visible = en[0].isIntersecting; }).observe(svcar.closest(".hero") || svcar);
+    }
+    cards[0].classList.add("is-active");
+    dots[0].setAttribute("aria-current", "true");
+    // Pierwsza brama otwiera się po animacji wjazdu bram
+    setTimeout(() => { setActive(0, false); start(); }, reduced ? 0 : 1100);
+  }
+
   /* ---------- Rok, promocje, dzisiejszy dzień, status otwarcia ---------- */
   $$("[data-year]").forEach((el) => (el.textContent = now.ymd.slice(0, 4)));
   $$("[data-until]").forEach((el) => { el.hidden = now.ymd > el.dataset.until; });
