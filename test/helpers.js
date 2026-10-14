@@ -4,7 +4,6 @@
  */
 process.env.DATABASE_URL = process.env.TEST_DATABASE_URL || "postgres://amigos:amigos@localhost:5432/amigos_test";
 process.env.PAYMENTS_MODE = "mock";
-process.env.BOOKING_LEAD_MINUTES = "0";
 process.env.DB_POOL_MAX = "20";
 delete process.env.STRIPE_SECRET_KEY;
 delete process.env.STRIPE_WEBHOOK_SECRET;
@@ -18,7 +17,7 @@ const ADMIN = { login: "admin", haslo: "test-haslo-123" };
 
 async function setup() {
   await query("DROP SCHEMA public CASCADE; CREATE SCHEMA public");
-  await seed({ quiet: true, adminLogin: ADMIN.login, adminPassword: ADMIN.haslo, days: 2 });
+  await seed({ quiet: true, adminLogin: ADMIN.login, adminPassword: ADMIN.haslo });
   const server = createServer();
   await new Promise((r) => server.listen(0, "127.0.0.1", r));
   const base = `http://127.0.0.1:${server.address().port}`;
@@ -31,26 +30,34 @@ async function setup() {
 
 const ymdPL = (d) => new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Warsaw" }).format(d);
 
-/** Slot testowy za `days` dni o godzinie `time` (czas polski). */
-async function makeSlot(slug, { days = 3, time = "21:30", capacity = 1 } = {}) {
-  const date = ymdPL(new Date(Date.now() + days * 86400000));
-  const { rows: [s] } = await query(
-    `INSERT INTO slots (service_id, start_at, end_at, capacity)
-     SELECT id, ($2::date + $3::time) AT TIME ZONE 'Europe/Warsaw', ($2::date + $3::time + interval '30 min') AT TIME ZONE 'Europe/Warsaw', $4
-       FROM services WHERE slug = $1
-     ON CONFLICT (service_id, start_at) DO UPDATE SET capacity = EXCLUDED.capacity, blocked = false
-     RETURNING id`, [slug, date, time, capacity]);
-  return { id: s.id, date, time };
+const { holidayName, addDays } = require("../api/_lib/availability");
+
+/**
+ * `days`-ty dzień roboczy (pon–pt, bez świąt), licząc od pojutrza + godzina – termin w grafiku.
+ * Różne `days` = różne dni, więc testy nie zajmują sobie nawzajem terminów.
+ */
+function pick({ days = 3, time = "10:00" } = {}) {
+  let d = addDays(ymdPL(new Date()), 1), n = 0;
+  while (n < days) {
+    d = addDays(d, 1);
+    const dow = new Date(d + "T12:00:00Z").getUTCDay();
+    if (dow >= 1 && dow <= 5 && !holidayName(d)) n++;
+  }
+  return { date: d, time };
 }
 
 const FORMS = {
-  "myjnia-reczna": { pakiet: "Pakiet komplet", pojazd: "Osobowy" },
-  "stacja-kontroli-pojazdow": { pojazd: "Osobowy", badanie: "Okresowe", rejestracja: "fnw 12345" },
-  "geometria-kol-3d": { pojazd: "SUV", zakres: "Sam pomiar", "dodatkowo[]": ["Diagnostyka komputerowa"] },
+  "myjnia-reczna": { pakiet: "Mycie ręczne nadwozia", pojazd: "Osobowy" },     // 45 min, 2 stanowiska
+  "stacja-kontroli-pojazdow": { pojazd: "Osobowy", badanie: "Okresowe", rejestracja: "fnw 12345" },  // 30 min, 2 linie
+  "geometria-kol-3d": { pojazd: "SUV", zakres: "Sam pomiar", "dodatkowo[]": ["Diagnostyka komputerowa"] },  // 45 min, 1 stanowisko
+  "rejestracja-pojazdow": { sprawa: "Przerejestrowanie" },  // 20 min, Biuro
 };
 
+// każda rezerwacja testowa z innego numeru (ten sam numer + usługa + dzień = duplikat)
+const randomPhone = () => "6" + String(crypto.randomInt(10 ** 8)).padStart(8, "0");
+
 function bookingBody(slug, slot, extra = {}) {
-  return { usluga: slug, ...FORMS[slug], data: slot.date, godzina: slot.time, imie: "Jan Testowy", telefon: "600 100 200",
+  return { usluga: slug, ...FORMS[slug], data: slot.date, godzina: slot.time, imie: "Jan Testowy", telefon: randomPhone(),
     email: "jan@example.com", zgoda: true, ...extra };
 }
 
@@ -74,4 +81,4 @@ async function adminCookie(base) {
   return r.headers.get("set-cookie").split(";")[0];
 }
 
-module.exports = { setup, makeSlot, bookingBody, post, get, adminCookie, query, ADMIN, ymdPL };
+module.exports = { setup, pick, bookingBody, randomPhone, post, get, adminCookie, query, ADMIN, ymdPL };

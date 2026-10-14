@@ -1,6 +1,7 @@
 /**
- * GET /api/terminy?usluga=<slug>&dzien=YYYY-MM-DD – wolne terminy usługi w danym dniu (czas Europe/Warsaw).
- * Zwraca tylko sloty niezablokowane, w przyszłości i z wolnym miejscem (wygasłe holdy się nie liczą).
+ * GET /api/terminy?usluga=<slug>&dzien=YYYY-MM-DD[&pojazd=…&pakiet=…&dodatkowo=…]
+ * Wolne godziny startu w danym dniu (czas Europe/Warsaw). Opcje z formularza wpływają na czas wizyty,
+ * więc lista pokazuje tylko te godziny, w których cała usługa się zmieści.
  */
 const { listAvailable } = require("./_lib/bookings");
 const { isRealDate, SERVICES } = require("./_lib/validate");
@@ -13,6 +14,15 @@ module.exports = handler(async (req, res) => {
   const day = q.get("dzien") || "";
   if (!Object.prototype.hasOwnProperty.call(SERVICES, slug)) throw new HttpError(422, "Nieznana usługa.");
   if (!isRealDate(day)) throw new HttpError(422, "Niepoprawna data.");
-  const slots = await listAvailable(slug, day);
-  sendJson(res, 200, { ok: true, dzien: day, terminy: slots.map((s) => ({ godzina: s.time, start: s.start, wolne: s.free })) });
+
+  // tylko opcje z listy formularza (reszta jest ignorowana)
+  const details = {};
+  for (const f of SERVICES[slug].fields) {
+    if (!f.opts) continue;
+    const vals = [...q.getAll(f.name), ...q.getAll(f.name + "[]")].filter((v) => f.opts.includes(v));
+    if (vals.length) details[f.name] = f.type === "checks" ? vals : vals[0];
+  }
+  const r = await listAvailable(slug, day, details);
+  sendJson(res, 200, { ok: true, dzien: day, czas: r.duration, zamkniete: r.closed || null,
+    terminy: r.starts.map((s) => ({ godzina: s.time, do: s.end, start: s.start.toISOString(), wolne: s.resources.length })) });
 });
