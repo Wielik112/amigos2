@@ -237,3 +237,22 @@ test("API /api/terminy: czas wizyty z wybranych opcji i godzina zakończenia", a
   assert.equal(av.toMin(first.do) - av.toMin(first.godzina), 90);
   assert.equal(first.godzina, new Date(day.date + "T12:00:00Z").getUTCDay() === 2 ? "09:00" : "08:00", "otwarcie wg grafiku (wt od 9:00)");
 });
+
+test("API /api/terminy?dni=1: kalendarz wolnych dni w całym horyzoncie", async () => {
+  const day = h.pick({ days: 14 });
+  const before = (await h.get(env.base, "/api/terminy?usluga=geometria-kol-3d&dni=1&zakres=Sam%20pomiar&pojazd=Osobowy")).json;
+  assert.equal(before.od, av.localYmd(new Date()));
+  assert.equal(Object.keys(before.dni).length, 61, "dziś + 60 dni horyzontu");
+  const n0 = before.dni[day.date].wolne;
+  assert.ok(n0 > 0);
+  const hol = Object.entries(before.dni).find(([d]) => av.holidayName(d));
+  if (hol) assert.equal(hol[1].wolne, 0);
+  const sunday = Object.keys(before.dni).find((d) => new Date(d + "T12:00:00Z").getUTCDay() === 0);
+  assert.equal(before.dni[sunday].wolne, 0, "niedziela zamknięta");
+  await createBooking(data("geometria-kol-3d", { date: day.date, time: before.dni[day.date].pierwsza }));
+  const after = (await h.get(env.base, "/api/terminy?usluga=geometria-kol-3d&dni=1&zakres=Sam%20pomiar&pojazd=Osobowy")).json;
+  assert.ok(after.dni[day.date].wolne < n0, "zajęta godzina znika z licznika dnia");
+  assert.notEqual(after.dni[day.date].pierwsza, before.dni[day.date].pierwsza);
+  const longer = (await h.get(env.base, "/api/terminy?usluga=geometria-kol-3d&dni=1&zakres=Geometria%20ca%C5%82ego%20auta&pojazd=Bus")).json;
+  assert.ok(longer.dni[day.date].wolne < after.dni[day.date].wolne, "dłuższa wizyta = mniej możliwych startów");
+});

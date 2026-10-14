@@ -1137,8 +1137,22 @@ def build_admin():
 <dialog class="adm-dlg" data-dlg-booking aria-labelledby="dlg-b-h"><div class="adm-dlg__in">
 <div class="adm-dlg__head"><h2 id="dlg-b-h" data-b-title>Rezerwacja</h2><button class="adm-x" type="button" data-close aria-label="Zamknij">×</button></div>
 <div data-b-body></div>
-<div class="adm-actions"><button class="btn btn--red" type="button" data-b-cancel hidden>Anuluj rezerwację</button><button class="btn btn--ghost" type="button" data-close>Zamknij</button></div>
+<div class="adm-actions"><button class="btn btn--blue" type="button" data-b-move hidden>Przełóż</button><button class="btn btn--red" type="button" data-b-cancel hidden>Anuluj rezerwację</button><button class="btn btn--ghost" type="button" data-close>Zamknij</button></div>
 </div></dialog>
+
+<dialog class="adm-dlg" data-dlg-move aria-labelledby="dlg-m-h"><form class="bform adm-dlg__in" data-move-form novalidate>
+<div class="adm-dlg__head"><h2 id="dlg-m-h">Przełóż wizytę</h2><button class="adm-x" type="button" data-close aria-label="Zamknij">×</button></div>
+<p data-m-who></p>
+<div class="row2"><div class="fld"><label for="m-day">Nowy dzień</label><input id="m-day" type="date" name="data" required></div>
+<div class="fld"><label for="m-len">Czas wizyty (min)</label><input id="m-len" type="number" name="czas" min="5" max="600" step="5" required></div></div>
+<div class="row2"><div class="fld" data-m-slot><label for="m-time">Godzina</label><select id="m-time" name="godzina"></select></div>
+<div class="fld" data-m-free hidden><label for="m-free">Godzina (dowolna)</label><input id="m-free" type="time" name="godzinaDowolna" step="300"></div>
+<div class="fld"><label for="m-res">Stanowisko</label><select id="m-res" name="stanowisko"></select></div></div>
+<div class="fld"><label class="check"><input type="checkbox" name="pozaGrafikiem"><span>Poza grafikiem (np. po godzinach, w dzień wolny)</span></label></div>
+<p class="fld__hint">Zaliczka i dane klienta zostają. Stary termin od razu wraca do puli. Zadzwoń albo napisz do klienta z nową godziną.</p>
+<div class="adm-actions"><button class="btn btn--blue" type="submit">Przełóż</button><button class="btn btn--ghost" type="button" data-close>Anuluj</button></div>
+<p class="bform__msg" role="alert" hidden data-m-msg></p>
+</form></dialog>
 
 <dialog class="adm-dlg" data-dlg-cancel aria-labelledby="dlg-c-h"><form class="bform adm-dlg__in" method="dialog" data-cancel-form>
 <div class="adm-dlg__head"><h2 id="dlg-c-h">Anulować rezerwację?</h2><button class="adm-x" type="button" data-close aria-label="Zamknij">×</button></div>

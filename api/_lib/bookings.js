@@ -55,6 +55,13 @@ async function listAvailable(slug, ymd, details) {
   return av.freeStarts({ query }, svc, ymd, { duration: av.durationFor(svc, details) });
 }
 
+/** Wolne dni (kalendarz w formularzu). */
+async function listDays(slug, details) {
+  const svc = await av.loadService({ query }, "slug = $1 AND active AND uses_slots", slug);
+  if (!svc) return { duration: 0, from: null, to: null, days: {} };
+  return av.freeDays({ query }, svc, { duration: av.durationFor(svc, details) });
+}
+
 async function addNotification(c, bookingId, type, read = false) {
   await c.query(
     `INSERT INTO notifications (booking_id, type, read_at) VALUES ($1, $2, CASE WHEN $3 THEN now() END)
@@ -159,6 +166,35 @@ async function createBooking(data) {
 }
 
 /**
+ * Wybór terminu w panelu (rezerwacja telefoniczna, przełożenie): sprawdza godziny pracy (chyba że „poza grafikiem”),
+ * wolne stanowisko i blokady. Bez minimalnego wyprzedzenia. Zwraca { resourceId, start, end, until }.
+ */
+async function pickAdminSlot(c, svc, o, { excludeBooking, preferResource } = {}) {
+  const ids = o.resourceId ? [o.resourceId] : svc.resourceIds;
+  if (o.resourceId && !svc.resourceIds.includes(o.resourceId)) throw new HttpError(422, "To stanowisko nie obsługuje tej usługi.");
+  await lockResources(c, ids);
+  const duration = o.duration;
+  let free, start;
+  if (o.outsideHours) {
+    start = av.localToUtc(o.date, av.toMin(o.time));
+    free = await av.resourcesFreeAt(c, svc, start, duration, { onlyResource: o.resourceId, excludeBooking });
+  } else {
+    const day = await av.freeStarts(c, svc, o.date, { duration, ignoreNotice: true, step: 5, onlyResource: o.resourceId, excludeBooking });
+    const hit = day.starts.find((s) => s.time === o.time);
+    if (!hit) {
+      throw new HttpError(409, day.closed ? `Ten dzień jest zamknięty (${day.closed}). Zaznacz „poza grafikiem”, jeśli mimo to chcesz zapisać.`
+        : "W tej godzinie nie ma wolnego stanowiska (albo jest poza godzinami pracy). Wybierz inną godzinę albo zaznacz „poza grafikiem”.");
+    }
+    free = hit.resources;
+    start = hit.start;
+  }
+  if (!free.length) throw new HttpError(409, "Stanowisko jest w tym czasie zajęte – wybierz inną godzinę albo inne stanowisko.");
+  const resourceId = free.includes(preferResource) ? preferResource : free[0];
+  const end = new Date(start.getTime() + duration * 60000);
+  return { resourceId, start, end, until: new Date(end.getTime() + (Number(svc.buffer_minutes) || 0) * 60000) };
+}
+
+/**
  * Rezerwacja wpisana w panelu (np. z telefonu): od razu potwierdzona, bez zaliczki.
  * o: { serviceId, date, time, duration?, resourceId?, outsideHours?, name, phone, email?, notes?, details? }
  */
@@ -167,32 +203,38 @@ async function createManualBooking(o, adminLogin) {
     return await tx(async (c) => {
       const svc = await av.loadService(c, "id = $1", o.serviceId);
       if (!svc || !svc.uses_slots) throw new HttpError(422, "Wybierz usługę z rezerwacją terminu.");
-      const ids = o.resourceId ? [o.resourceId] : svc.resourceIds;
-      if (o.resourceId && !svc.resourceIds.includes(o.resourceId)) throw new HttpError(422, "To stanowisko nie obsługuje tej usługi.");
-      await lockResources(c, ids);
-      const duration = o.duration || av.durationFor(svc, o.details || {});
-      let resourceId, start;
-      if (o.outsideHours) {
-        start = av.localToUtc(o.date, av.toMin(o.time));
-        [resourceId] = await av.resourcesFreeAt(c, svc, start, duration, { onlyResource: o.resourceId });
-      } else {
-        const day = await av.freeStarts(c, svc, o.date, { duration, ignoreNotice: true, step: 5, onlyResource: o.resourceId });
-        const hit = day.starts.find((s) => s.time === o.time);
-        if (!hit) {
-          throw new HttpError(409, day.closed ? `Ten dzień jest zamknięty (${day.closed}). Zaznacz „poza grafikiem”, jeśli mimo to chcesz zapisać.`
-            : "W tej godzinie nie ma wolnego stanowiska (albo jest poza godzinami pracy). Wybierz inną godzinę albo zaznacz „poza grafikiem”.");
-        }
-        resourceId = hit.resources[0];
-        start = hit.start;
-      }
-      if (!resourceId) throw new HttpError(409, "Stanowisko jest w tym czasie zajęte – wybierz inną godzinę albo inne stanowisko.");
-      const end = new Date(start.getTime() + duration * 60000);
-      const booking = await insertBooking(c, {
-        serviceId: svc.id, resourceId, start, end, until: new Date(end.getTime() + (Number(svc.buffer_minutes) || 0) * 60000),
+      const slot = await pickAdminSlot(c, svc, { ...o, duration: o.duration || av.durationFor(svc, o.details || {}) });
+      return insertBooking(c, {
+        serviceId: svc.id, resourceId: slot.resourceId, start: slot.start, end: slot.end, until: slot.until,
         status: "confirmed", name: o.name, phone: o.phone, email: o.email, details: o.details,
         notes: [o.notes, `Dodana w panelu przez ${adminLogin}`].filter(Boolean).join(" · "), consentAt: new Date(), source: "telefon",
       });
-      return booking;
+    });
+  } catch (e) {
+    if (e.code === "23P01") throw new HttpError(409, "Stanowisko jest w tym czasie zajęte – wybierz inną godzinę.");
+    throw e;
+  }
+}
+
+/**
+ * Przełożenie potwierdzonej wizyty na inny termin (klient zadzwonił). Zaliczka i dane zostają,
+ * a stary termin od razu wraca do puli. o: { date, time, duration?, resourceId?, outsideHours? }
+ */
+async function rescheduleBooking(id, o, adminLogin) {
+  try {
+    return await tx(async (c) => {
+      const { rows: [b] } = await c.query("SELECT * FROM bookings WHERE id = $1 FOR UPDATE", [id]);
+      if (!b) throw new HttpError(404, "Nie ma takiej rezerwacji.");
+      if (b.status !== "confirmed" || !b.start_at) throw new HttpError(409, "Przełożyć można tylko potwierdzoną wizytę z terminem.");
+      const svc = await av.loadService(c, "id = $1", b.service_id);
+      const duration = o.duration || Math.round((b.end_at - b.start_at) / 60000);
+      const slot = await pickAdminSlot(c, svc, { ...o, duration }, { excludeBooking: id, preferResource: b.resource_id });
+      const was = `${av.localYmd(b.start_at)} ${av.localHm(b.start_at)}`;
+      await c.query(
+        `UPDATE bookings SET start_at = $2, end_at = $3, block_until = $4, resource_id = $5,
+                notes = concat_ws(' · ', notes, $6::text) WHERE id = $1`,
+        [id, slot.start, slot.end, slot.until, slot.resourceId, `Przełożona z ${was} przez ${adminLogin}`]);
+      return { from: was };
     });
   } catch (e) {
     if (e.code === "23P01") throw new HttpError(409, "Stanowisko jest w tym czasie zajęte – wybierz inną godzinę.");
@@ -318,5 +360,5 @@ async function paymentInfo(paymentId) {
   return r || null;
 }
 
-module.exports = { createBooking, createManualBooking, applyPaymentEvent, cancelBooking, listAvailable, expireHolds,
+module.exports = { createBooking, createManualBooking, rescheduleBooking, applyPaymentEvent, cancelBooking, listAvailable, listDays, expireHolds,
   publicStatus, paymentInfo, SLOT_TAKEN, EFFECTIVE_STATUS };

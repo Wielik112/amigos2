@@ -6,7 +6,7 @@ const { query, tx } = require("./_lib/db");
 const { TZ, getConfig } = require("./_lib/config");
 const { login, logout, requireAdmin } = require("./_lib/auth");
 const { isLimited } = require("./_lib/ratelimit");
-const { cancelBooking, createManualBooking, expireHolds, EFFECTIVE_STATUS: EFF } = require("./_lib/bookings");
+const { cancelBooking, createManualBooking, rescheduleBooking, expireHolds, EFFECTIVE_STATUS: EFF } = require("./_lib/bookings");
 const av = require("./_lib/availability");
 const { isRealDate, clean, normalizePhone, SERVICES, HM_RE } = require("./_lib/validate");
 const DEFAULTS = require("./_lib/defaults");
@@ -68,7 +68,7 @@ async function getBooking(id) {
   const { rows: payments } = await query(
     "SELECT id, provider, provider_ref, amount, currency, status, created_at, updated_at FROM payments WHERE booking_id = $1 ORDER BY created_at", [id]);
   return {
-    id: b.id, status: b.eff_status, usluga: b.slug, uslugaNazwa: b.service_name, kontakt: !b.uses_slots, zrodlo: b.source,
+    id: b.id, status: b.eff_status, usluga: b.slug, uslugaId: b.service_id, stanowiskoId: b.resource_id, uslugaNazwa: b.service_name, kontakt: !b.uses_slots, zrodlo: b.source,
     start: b.start_at, koniec: b.end_at, data: b.date, godzina: b.time, godzinaDo: b.time_end, stanowisko: b.resource_name,
     klient: b.customer_name, telefon: b.phone, email: b.email, details: b.details, notatki: b.notes,
     zgoda: b.consent_at, utworzono: b.created_at, potwierdzono: b.confirmed_at, holdDo: b.hold_expires_at,
@@ -360,6 +360,16 @@ module.exports = handler(async (req, res) => {
     const id = seg[1];
     if (!UUID_RE.test(id || "")) throw new HttpError(404, "Nie ma takiej rezerwacji.");
     if (seg.length === 2 && m === "GET") return ok({ rezerwacja: await getBooking(id) });
+    if (seg[2] === "przeloz" && m === "POST") {
+      const b = await readBody(req);
+      need(isRealDate(b.data || ""), "Wybierz dzień.");
+      need(HM_RE.test(b.godzina || ""), "Wybierz godzinę.");
+      const duration = b.czas ? int(b.czas) : null;
+      need(duration === null || (duration >= 5 && duration <= 600), "Czas wizyty: od 5 do 600 minut.");
+      const out = await rescheduleBooking(id, { date: b.data, time: b.godzina, duration, resourceId: int(b.stanowisko) || null,
+        outsideHours: b.pozaGrafikiem === true }, admin.login);
+      return ok({ z: out.from, rezerwacja: await getBooking(id) });
+    }
     if (seg[2] === "anuluj" && m === "POST") {
       const body = await readBody(req);
       const { refund } = await cancelBooking(id, admin.login, clean(body.powod, 300) || null);
@@ -372,7 +382,8 @@ module.exports = handler(async (req, res) => {
     need(svc && svc.uses_slots, "Wybierz usługę.");
     need(isRealDate(q.get("dzien") || ""), "Wybierz dzień.");
     const duration = int(q.get("czas")) || av.durationFor(svc, {});
-    const r = await av.freeStarts(db, svc, q.get("dzien"), { duration, ignoreNotice: true, step: 15, onlyResource: int(q.get("stanowisko")) || null });
+    const bez = UUID_RE.test(q.get("bez") || "") ? q.get("bez") : null;   // przekładana wizyta nie blokuje sama siebie
+    const r = await av.freeStarts(db, svc, q.get("dzien"), { duration, ignoreNotice: true, step: 15, onlyResource: int(q.get("stanowisko")) || null, excludeBooking: bez });
     return ok({ czas: duration, zamkniete: r.closed, terminy: r.starts.map((s) => ({ godzina: s.time, do: s.end, wolne: s.resources.length })) });
   }
 

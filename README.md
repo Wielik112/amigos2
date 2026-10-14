@@ -57,10 +57,13 @@ W trybie `PAYMENTS_MODE=mock` cały przepływ działa bez kluczy: formularz → 
 3. **Stanowiska** (Usługi → Stanowiska): ile wizyt naraz. Stanowisko może obsługiwać kilka usług – wtedy wizyta w jednej blokuje je także dla drugiej (np. biuro: rejestracja + ubezpieczenia).
 4. **Zasady**: zapas po każdej wizycie, co ile minut pokazywać godziny startu, minimalne wyprzedzenie, na ile dni do przodu.
 
+**W formularzu klient wybiera termin z kalendarza:** aktywne są tylko dni z wolnymi godzinami (czerwona kropka = ostatnie wolne miejsca), godziny są przyciskami z godziną zakończenia, a przycisk „Najbliższy wolny termin” wybiera pierwszy wolny dzień i godzinę jednym kliknięciem. Zmiana opcji (np. dłuższy pakiet) od razu przelicza dni i godziny. Kalendarz pobiera dane jednym zapytaniem (`GET /api/terminy?usluga=…&dni=1`); gdyby API nie odpowiadało, formularz wraca do zwykłego pola daty i listy godzin.
+
 Ochrona przed konfliktami:
 - **Dwie osoby na ten sam termin:** zapis w transakcji blokuje stanowiska usługi (`SELECT … FOR UPDATE`), a w bazie działa constraint `bookings_no_overlap` (`EXCLUDE USING gist`) – dwie aktywne wizyty na jednym stanowisku nie mogą na siebie nachodzić, łącznie z zapasem. Przegrany dostaje „Ten termin właśnie został zajęty”.
 - **Rezerwacje z telefonu / na miejscu:** Kalendarz → kliknij wolne miejsce albo „+ Dodaj rezerwację”. Termin od razu znika z rezerwacji online. Opcja „poza grafikiem” pozwala zapisać kogoś po godzinach – nadal bez nakładania się na inne wizyty.
 - **Blokady czasu** (Kalendarz → „Zablokuj czas”): na całą usługę albo jedno stanowisko (awaria, szkolenie).
+- **Przełożenie wizyty** (klient dzwoni): szczegóły rezerwacji → „Przełóż”. Panel pokazuje tylko wolne godziny (przekładana wizyta nie blokuje sama siebie), zaliczka i dane zostają, stary termin od razu wraca do puli, a w notatce zapisuje się, skąd i kto przełożył. Klientowi nową godzinę przekazuje się telefonicznie – system nie wysyła SMS-ów ani e-maili.
 - **Duplikaty:** ten sam numer telefonu nie zarezerwuje drugi raz tej samej usługi tego samego dnia.
 - Zmiana grafiku, dodanie dnia wolnego albo blokady nie przesuwa już zapisanych wizyt – panel ostrzega, ile wizyt wypada w tym czasie.
 
