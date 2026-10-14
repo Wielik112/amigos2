@@ -8,6 +8,7 @@
     "migrate": "node scripts/migrate.js",
     "seed": "node scripts/seed.js",
     "generate": "python3 src/build.py",
+    "vercel-build": "node scripts/vercel-build.js",
     "test": "node --test --test-concurrency=1 test/*.test.js"
   },
   "dependencies": {
