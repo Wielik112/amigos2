@@ -43,6 +43,9 @@
   ],
   "crons": [{ "path": "/api/cron", "schedule": "0 3 * * *" }],
   "redirects": [
+    { "source": "/scripts/:path*", "destination": "/", "permanent": false },
+    { "source": "/package.json", "destination": "/", "permanent": false },
+    { "source": "/package-lock.json", "destination": "/", "permanent": false },
     { "source": "/index", "destination": "/", "permanent": true },
     { "source": "/uslugi/przeglad", "destination": "/uslugi/stacja-kontroli-pojazdow", "permanent": true },
     { "source": "/uslugi/myjnia", "destination": "/uslugi/myjnia-reczna", "permanent": true },

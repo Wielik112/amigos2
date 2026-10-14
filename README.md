@@ -13,12 +13,14 @@ Rezerwacje działają na funkcjach Vercel (`/api`) i bazie Postgres: wolne termi
 
 ### Baza i panel (wymagane do rezerwacji)
 
-1. Vercel → **Storage / Marketplace → Neon (Postgres)** → utwórz bazę i podłącz do projektu – Vercel sam doda `DATABASE_URL`.
-2. Dodaj zmienne: `PAYMENTS_MODE=mock`, `PUBLIC_BASE_URL=https://twoja-domena.pl`, `CRON_SECRET=<losowy ciąg>`, `ADMIN_LOGIN`, `ADMIN_PASSWORD` (pełna lista: `.env.example`).
-3. Raz, z własnego komputera, z `DATABASE_URL` produkcyjnej bazy: `npm install && npm run seed` – tworzy tabele, 5 usług (zaliczka 50 zł), sloty na 2 tygodnie i konto admina.
-4. **Redeploy**. Panel: `https://twoja-domena.pl/admin`.
+Wszystko klika się w Vercelu – niczego nie trzeba instalować lokalnie.
 
-### Żeby zgłoszenia przychodziły na maila
+1. Vercel → projekt → **Storage → Create Database → Neon** (region Frankfurt, plan Free) → podłącz do projektu we wszystkich środowiskach. Vercel sam doda `DATABASE_URL`.
+2. **Settings → Environment Variables**: `PAYMENTS_MODE=mock`, `ADMIN_LOGIN=admin`, `ADMIN_PASSWORD=<mocne hasło>`, `CRON_SECRET=<losowy ciąg>`, a tylko dla Production `PUBLIC_BASE_URL=https://twoja-domena.pl` (pełna lista: `.env.example`).
+3. **Redeploy**. Przy każdym wdrożeniu Vercel uruchamia `npm run vercel-build` (`scripts/vercel-build.js`): tworzy/aktualizuje tabele, 5 usług (zaliczka 50 zł), sloty na 2 tygodnie dla usług, które jeszcze nie mają slotów, i konto admina z `ADMIN_PASSWORD`. Ustawień zmienionych w panelu nie nadpisuje, usuniętych slotów nie odtwarza. Zmiana `ADMIN_PASSWORD` + Redeploy = nowe hasło admina.
+4. Panel: `https://twoja-domena.pl/admin`. Kolejne terminy dodaje się w panelu (Grafik → Generator slotów).
+
+### Żeby zgłoszenia przychodziły na maila### Żeby zgłoszenia przychodziły na maila
 
 Vercel → Project → Settings → Environment Variables:
 
@@ -39,7 +41,7 @@ Wymaga Node 20+ i Postgresa (lokalnie albo darmowy Neon).
 ```bash
 cp .env.example .env        # uzupełnij DATABASE_URL (i ADMIN_PASSWORD)
 npm install
-npm run seed                # tabele + usługi + sloty + konto admina (można powtarzać)
+npm run seed                # tabele + usługi + sloty + konto admina (można powtarzać; na Vercelu dzieje się to samo przy wdrożeniu)
 npm run dev                 # http://localhost:3000, panel: http://localhost:3000/admin
 npm test                    # testy na osobnej bazie: TEST_DATABASE_URL (domyślnie postgres://amigos:amigos@localhost:5432/amigos_test – UWAGA: test czyści tę bazę)
 ```
@@ -115,7 +117,7 @@ api/cron.js               sprzątanie wygasłych holdów
 api/_lib/                 logika: rezerwacje, płatności (mock/Stripe), auth, walidacja, SQL migracji
 admin/                    panel rezerwacji (/admin) + assets/css/admin.css, assets/js/admin.js
 potwierdzenie.html, platnosc-nieudana.html, platnosc/mock.html   strony po płatności
-scripts/                  serwer lokalny, migracje, seed
+scripts/                  serwer lokalny, migracje, seed, krok build na Vercelu
 test/                     testy (node --test)
 assets/                   CSS, JS, fonty (lokalnie – bez Google Fonts), obrazy
 vercel.json               czyste adresy, nagłówki bezpieczeństwa (CSP, HSTS), cache
