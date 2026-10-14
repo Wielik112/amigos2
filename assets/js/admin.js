@@ -213,6 +213,7 @@
         ["Płatności", pays ? `<ul>${pays}</ul>` : "", true],
       ])}`;
     $("[data-b-cancel]").hidden = !(r.status === "confirmed" || r.status === "pending_payment");
+    $("[data-b-move]").hidden = !(r.status === "confirmed" && !r.kontakt);
     if (!dlgB.open) dlgB.showModal();
   }
 
@@ -242,6 +243,66 @@
       refreshPanel();
     } catch (err) {
       showMsg($("[data-c-msg]"), err.message);
+    } finally { btn.disabled = false; }
+  });
+
+  /* ---------- Przełożenie (klient zadzwonił) ---------- */
+  const dlgM = $("[data-dlg-move]");
+  const moveForm = $("[data-move-form]");
+  let moveSeq = 0;
+  async function loadMoveTimes() {
+    const free = moveForm.pozaGrafikiem.checked;
+    $("[data-m-slot]").hidden = free;
+    $("[data-m-free]").hidden = !free;
+    if (free || !current) return;
+    const sel = moveForm.godzina, my = ++moveSeq;
+    sel.innerHTML = "<option>Sprawdzam…</option>";
+    sel.disabled = true;
+    const q = new URLSearchParams({ usluga: current.uslugaId, dzien: moveForm.data.value, czas: moveForm.czas.value || "", bez: current.id });
+    if (moveForm.stanowisko.value) q.set("stanowisko", moveForm.stanowisko.value);
+    let r;
+    try { r = await api("wolne?" + q); } catch (e) { sel.innerHTML = `<option value="">${esc(e.message)}</option>`; return; }
+    if (my !== moveSeq) return;
+    sel.disabled = false;
+    if (!r.terminy.length) { sel.innerHTML = `<option value="">${r.zamkniete ? "Zamknięte – " + esc(r.zamkniete) : "Brak wolnego miejsca tego dnia"}</option>`; return; }
+    sel.innerHTML = r.terminy.map((t) => `<option value="${t.godzina}">${t.godzina}–${t.do}</option>`).join("");
+    if (r.terminy.some((t) => t.godzina === current.godzina)) sel.value = current.godzina;
+  }
+  $("[data-b-move]").addEventListener("click", () => {
+    if (!current) return;
+    moveForm.reset();
+    showMsg($("[data-m-msg]"), "");
+    $("[data-m-who]").textContent = `${current.uslugaNazwa} – ${current.klient}. Teraz: ${longDay(current.data)}, ${range(current.godzina, current.godzinaDo)}${current.stanowisko ? " (" + current.stanowisko + ")" : ""}.`;
+    moveForm.data.value = current.data;
+    moveForm.czas.value = toMin(current.godzinaDo) - toMin(current.godzina);
+    moveForm.godzinaDowolna.value = current.godzina;
+    const s = svcById(current.uslugaId);
+    const list = state.resources.filter((r) => s && s.stanowiska.includes(r.id) && r.aktywne);
+    moveForm.stanowisko.innerHTML = `<option value="">Dowolne wolne</option>` + list.map((r) => `<option value="${r.id}">${esc(r.nazwa)}</option>`).join("");
+    loadMoveTimes();
+    dlgM.showModal();
+  });
+  ["data", "czas", "stanowisko", "pozaGrafikiem"].forEach((n) => moveForm[n].addEventListener("change", loadMoveTimes));
+  moveForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const msg = $("[data-m-msg]");
+    showMsg(msg, "");
+    const free = moveForm.pozaGrafikiem.checked;
+    const godzina = free ? moveForm.godzinaDowolna.value : moveForm.godzina.value;
+    if (!godzina) { showMsg(msg, "Wybierz godzinę."); return; }
+    const btn = $("button[type=submit]", moveForm);
+    btn.disabled = true;
+    try {
+      const { rezerwacja: r } = await api(`rezerwacje/${current.id}/przeloz`, { method: "POST", body: {
+        data: moveForm.data.value, godzina, czas: Number(moveForm.czas.value), pozaGrafikiem: free,
+        stanowisko: moveForm.stanowisko.value ? Number(moveForm.stanowisko.value) : null } });
+      dlgM.close();
+      toast("Wizyta przełożona", ` ${r.klient}: ${shortDay(r.data)} ${range(r.godzina, r.godzinaDo)} · ${r.stanowisko}`);
+      openBooking(r.id);
+      refreshPanel();
+    } catch (err) {
+      showMsg(msg, err.message);
+      if (err.status === 409) loadMoveTimes();
     } finally { btn.disabled = false; }
   });
 

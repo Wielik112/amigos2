@@ -183,3 +183,34 @@ test("lista rezerwacji: wyszukiwanie po telefonie i numerze rejestracyjnym", asy
   assert.ok(byPlate.json.rezerwacje.some((x) => x.id === r.json.bookingId));
   assert.equal(byPlate.json.rezerwacje[0].stanowisko.startsWith("Stacja kontroli"), true);
 });
+
+test("przełożenie wizyty: stary termin wraca do puli, nowy jest zajęty, zaliczka zostaje", async () => {
+  const day = h.pick({ days: 8, time: "10:00" });
+  const r = await h.post(env.base, "/api/zapis", h.bookingBody("geometria-kol-3d", day));
+  const id = r.json.bookingId;
+  const pend = await req("POST", `/api/admin/rezerwacje/${id}/przeloz`, { data: day.date, godzina: "12:00" });
+  assert.equal(pend.status, 409, "wizyty w trakcie płatności nie przekładamy");
+  await h.post(env.base, "/api/platnosc/mock", { paymentId: r.json.redirectUrl.split("/").pop(), wynik: "zaplac" });
+
+  const geo = await svcId("geometria-kol-3d");
+  const w = await req("GET", `/api/admin/wolne?usluga=${geo}&dzien=${day.date}&czas=45&bez=${id}`);
+  assert.ok(w.json.terminy.some((t) => t.godzina === "10:15"), "z „bez” przekładana wizyta nie blokuje sama siebie");
+
+  const mv = await req("POST", `/api/admin/rezerwacje/${id}/przeloz`, { data: day.date, godzina: "10:15" });
+  assert.equal(mv.status, 200, JSON.stringify(mv.json));
+  assert.equal(mv.json.rezerwacja.godzina, "10:15");
+  assert.equal(mv.json.rezerwacja.godzinaDo, "11:00");
+  assert.match(mv.json.rezerwacja.notatki, /Przełożona z .* 10:00 przez admin/);
+  assert.equal(mv.json.rezerwacja.platnosci[0].status, "succeeded");
+
+  const later = h.pick({ days: 9 });
+  const mv2 = await req("POST", `/api/admin/rezerwacje/${id}/przeloz`, { data: later.date, godzina: "14:00", czas: 60 });
+  assert.equal(mv2.json.rezerwacja.godzinaDo, "15:00");
+  assert.ok((await free("geometria-kol-3d", day.date)).includes("10:00"), "stary termin wolny");
+  assert.ok(!(await free("geometria-kol-3d", later.date)).includes("14:00"), "nowy termin zajęty");
+
+  const other = await h.post(env.base, "/api/zapis", h.bookingBody("geometria-kol-3d", { date: later.date, time: "16:00" }));
+  await h.post(env.base, "/api/platnosc/mock", { paymentId: other.json.redirectUrl.split("/").pop(), wynik: "zaplac" });
+  const clash = await req("POST", `/api/admin/rezerwacje/${other.json.bookingId}/przeloz`, { data: later.date, godzina: "14:30" });
+  assert.equal(clash.status, 409, "nie nałoży się na inną wizytę");
+});

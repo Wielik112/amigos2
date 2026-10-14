@@ -107,13 +107,9 @@ async function loadService(db, where, param) {
   return svc;
 }
 
-/** Godziny pracy danego dnia jako przedziały minut [[od, do], …] + powód zamknięcia. */
-async function dayWindows(db, svc, ymd) {
-  const { rows: ex } = await db.query(
-    `SELECT service_id, closed, to_char(start_time, 'HH24:MI') AS s, to_char(end_time, 'HH24:MI') AS e, note
-       FROM schedule_exceptions WHERE day = $1 AND (service_id = $2 OR service_id IS NULL)
-      ORDER BY service_id NULLS LAST LIMIT 1`, [ymd, svc.id]);
-  const exc = ex[0];
+/** Godziny pracy dnia z gotowych danych: wyjątek usługi > wyjątek ogólny > święto > grafik tygodniowy. */
+function windowsFor(svc, ymd, excRows) {
+  const exc = excRows.find((e) => e.service_id === svc.id) || excRows.find((e) => e.service_id === null);
   if (exc) {
     if (exc.closed) return { windows: [], closed: exc.note || "Dzień wolny" };
     return { windows: [[toMin(exc.s), toMin(exc.e)]], closed: null, exception: exc.note || "Zmienione godziny" };
@@ -124,41 +120,44 @@ async function dayWindows(db, svc, ymd) {
   return { windows: svc.hours.filter((h) => h.weekday === dow).map((h) => [toMin(h.s), toMin(h.e)]), closed: null };
 }
 
-const overlaps = (aStart, aEnd, bStart, bEnd) => aStart < bEnd && aEnd > bStart;
+async function loadExceptions(db, svc, from, to) {
+  const { rows } = await db.query(
+    `SELECT service_id, to_char(day, 'YYYY-MM-DD') AS day, closed, to_char(start_time, 'HH24:MI') AS s, to_char(end_time, 'HH24:MI') AS e, note
+       FROM schedule_exceptions WHERE day BETWEEN $1::date AND $2::date AND (service_id = $3 OR service_id IS NULL)`, [from, to, svc.id]);
+  return rows;
+}
 
-/**
- * Wolne godziny startu dla usługi w danym dniu.
- * opts: { duration, now, ignoreNotice, ignoreHours, onlyResource, excludeBooking }
- * Zwraca { duration, closed, starts: [{ time, end, start: Date, endAt: Date, resources: [id…] }] }.
- */
-async function freeStarts(db, svc, ymd, opts = {}) {
-  const now = opts.now || new Date();
-  const duration = opts.duration || durationFor(svc, {});
-  const buffer = Number(svc.buffer_minutes) || 0;
-  const today = localYmd(now);
-  const out = { duration, closed: null, starts: [] };
-  if (!opts.ignoreHours && (ymd < today || ymd > addDays(today, svc.max_days_ahead))) return { ...out, closed: "Poza zakresem rezerwacji" };
+/** Godziny pracy danego dnia jako przedziały minut [[od, do], …] + powód zamknięcia. */
+async function dayWindows(db, svc, ymd) {
+  return windowsFor(svc, ymd, await loadExceptions(db, svc, ymd, ymd));
+}
 
-  const { windows, closed } = opts.ignoreHours ? { windows: [[0, 24 * 60]], closed: null } : await dayWindows(db, svc, ymd);
-  if (closed) return { ...out, closed };
-  const resources = opts.onlyResource ? [opts.onlyResource] : svc.resourceIds;
-  if (!windows.length || !resources.length) return out;
-
-  const dayStart = localToUtc(ymd, 0), dayEnd = localToUtc(addDays(ymd, 1), 0);
+/** Zajęte przedziały (aktywne wizyty z zapasem) i blokady na stanowiskach usługi w zakresie [from, to). */
+async function loadBusy(db, svc, resources, from, to, excludeBooking) {
   const [{ rows: busy }, { rows: blocks }] = await Promise.all([
     db.query(
       `SELECT resource_id, start_at, block_until FROM bookings
         WHERE resource_id = ANY($1::int[]) AND start_at < $3 AND block_until > $2 AND ($4::uuid IS NULL OR id <> $4::uuid)
           AND (status = 'confirmed' OR (status = 'pending_payment' AND hold_expires_at > now()))`,
-      [resources, dayStart, new Date(dayEnd.getTime() + 12 * 3600000), opts.excludeBooking || null]),
+      [resources, from, to, excludeBooking || null]),
     db.query(
       `SELECT service_id, resource_id, start_at, end_at FROM time_blocks
         WHERE (service_id = $1 OR resource_id = ANY($2::int[])) AND start_at < $4 AND end_at > $3`,
-      [svc.id, resources, dayStart, dayEnd]),
+      [svc.id, resources, from, to]),
   ]);
+  return { busy, blocks };
+}
+
+const overlaps = (aStart, aEnd, bStart, bEnd) => aStart < bEnd && aEnd > bStart;
+
+/** Czyste liczenie startów dla jednego dnia (bez zapytań do bazy). */
+function computeStarts(svc, ymd, windows, resources, { busy, blocks }, opts) {
+  const now = opts.now || new Date();
+  const duration = opts.duration;
+  const buffer = Number(svc.buffer_minutes) || 0;
   const minStart = opts.ignoreNotice ? -Infinity : now.getTime() + (Number(svc.min_notice_minutes) || 0) * 60000;
   const step = opts.step || Number(svc.step_minutes) || 30;
-
+  const starts = [];
   for (const [wStart, wEnd] of windows) {
     for (let m = wStart; m + duration <= wEnd; m += step) {
       const s = localToUtc(ymd, m).getTime();
@@ -169,10 +168,53 @@ async function freeStarts(db, svc, ymd, opts = {}) {
       const free = resources.filter((r) =>
         !busy.some((b) => b.resource_id === r && overlaps(s, until, b.start_at.getTime(), b.block_until.getTime())) &&
         !blocks.some((b) => b.resource_id === r && overlaps(s, e, b.start_at.getTime(), b.end_at.getTime())));
-      if (free.length) out.starts.push({ time: fmtMin(m), end: fmtMin(m + duration), start: new Date(s), endAt: new Date(e), resources: free });
+      if (free.length) starts.push({ time: fmtMin(m), end: fmtMin(m + duration), start: new Date(s), endAt: new Date(e), resources: free });
     }
   }
+  return starts;
+}
+
+/**
+ * Wolne godziny startu dla usługi w danym dniu.
+ * opts: { duration, now, ignoreNotice, onlyResource, excludeBooking, step }
+ * Zwraca { duration, closed, starts: [{ time, end, start: Date, endAt: Date, resources: [id…] }] }.
+ */
+async function freeStarts(db, svc, ymd, opts = {}) {
+  const now = opts.now || new Date();
+  const duration = opts.duration || durationFor(svc, {});
+  const today = localYmd(now);
+  const out = { duration, closed: null, starts: [] };
+  if (!opts.ignoreNotice && (ymd < today || ymd > addDays(today, svc.max_days_ahead))) return { ...out, closed: "Poza zakresem rezerwacji" };
+  const { windows, closed } = await dayWindows(db, svc, ymd);
+  if (closed) return { ...out, closed };
+  const resources = opts.onlyResource ? [opts.onlyResource] : svc.resourceIds;
+  if (!windows.length || !resources.length) return out;
+  const data = await loadBusy(db, svc, resources, localToUtc(ymd, 0), localToUtc(addDays(ymd, 1), 0), opts.excludeBooking);
+  out.starts = computeStarts(svc, ymd, windows, resources, data, { ...opts, now, duration });
   return out;
+}
+
+/**
+ * Podsumowanie wolnych terminów dla wielu dni naraz (kalendarz w formularzu) – 3 zapytania niezależnie od liczby dni.
+ * Zwraca { duration, from, to, days: { "RRRR-MM-DD": { n: liczba wolnych startów, first: "HH:MM" | null, closed: powód | null } } }.
+ */
+async function freeDays(db, svc, opts = {}) {
+  const now = opts.now || new Date();
+  const duration = opts.duration || durationFor(svc, {});
+  const from = localYmd(now), to = addDays(from, svc.max_days_ahead);
+  const resources = svc.resourceIds;
+  const [exc, data] = await Promise.all([
+    loadExceptions(db, svc, from, to),
+    resources.length ? loadBusy(db, svc, resources, localToUtc(from, 0), localToUtc(addDays(to, 1), 0)) : { busy: [], blocks: [] },
+  ]);
+  const days = {};
+  for (let d = from; d <= to; d = addDays(d, 1)) {
+    const { windows, closed } = windowsFor(svc, d, exc.filter((e) => e.day === d));
+    if (closed || !windows.length || !resources.length) { days[d] = { n: 0, first: null, closed: closed || null }; continue; }
+    const starts = computeStarts(svc, d, windows, resources, data, { now, duration });
+    days[d] = { n: starts.length, first: starts.length ? starts[0].time : null, closed: null };
+  }
+  return { duration, from, to, days };
 }
 
 /**
@@ -198,4 +240,4 @@ async function resourcesFreeAt(db, svc, start, duration, opts = {}) {
   return resources.filter((r) => !busy.some((b) => b.resource_id === r) && !blocks.some((b) => b.resource_id === r));
 }
 
-module.exports = { freeStarts, resourcesFreeAt, loadService, dayWindows, durationFor, holidays, holidayName, localToUtc, localYmd, localHm, toMin, fmtMin, addDays, isoDow };
+module.exports = { freeStarts, freeDays, resourcesFreeAt, loadService, dayWindows, durationFor, holidays, holidayName, localToUtc, localYmd, localHm, toMin, fmtMin, addDays, isoDow };
