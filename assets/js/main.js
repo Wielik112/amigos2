@@ -212,12 +212,13 @@
 
   // Wolne godziny z systemu rezerwacji (cache na dzień; po „termin zajęty” pobieramy od nowa)
   const slotCache = new Map();
-  const fetchSlots = (slug, ymd, fresh) => {
-    const key = slug + "|" + ymd;
+  // opts: wybrane opcje formularza (wpływają na czas wizyty, więc i na listę godzin)
+  const fetchSlots = (slug, ymd, fresh, opts) => {
+    const key = slug + "|" + ymd + "|" + opts;
     if (!fresh && slotCache.has(key)) return slotCache.get(key);
-    const p = fetch(`/api/terminy?usluga=${encodeURIComponent(slug)}&dzien=${ymd}`, { headers: { Accept: "application/json" } })
+    const p = fetch(`/api/terminy?usluga=${encodeURIComponent(slug)}&dzien=${ymd}${opts ? "&" + opts : ""}`, { headers: { Accept: "application/json" } })
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
-      .then((j) => (j.terminy || []).map((t) => t.godzina));
+      .then((j) => ({ list: j.terminy || [], closed: j.zamkniete || null }));
     slotCache.set(key, p);
     p.catch(() => slotCache.delete(key));
     return p;
@@ -246,7 +247,13 @@
     const slotSel = $("[data-slots]", form);
     const slug = ($('input[name="usluga"]', form) || {}).value || "";
     let known = null;   // wolne godziny wybranego dnia (null = jeszcze nie wiemy)
+    let closedWhy = null;
     let seq = 0;
+    const optParams = () => {
+      const p = new URLSearchParams();
+      $$('input[type="radio"]:checked, input[type="checkbox"]:checked', form).forEach((i) => { if (i.name !== "zgoda") p.append(i.name, i.value); });
+      return p.toString();
+    };
     const fillSlots = async (fresh) => {
       if (!dateInp || !slotSel) return;
       const v = dateInp.value;
@@ -259,26 +266,30 @@
       add("", "Sprawdzam wolne godziny…");
       slotSel.disabled = true;
       let list;
-      try { list = await fetchSlots(slug, v, fresh); } catch (e) {
+      try { ({ list, closed: closedWhy } = await fetchSlots(slug, v, fresh, optParams())); } catch (e) {
         if (my !== seq) return;
         slotSel.replaceChildren(); add("", "Nie udało się pobrać godzin – wybierz dzień ponownie");
         return;
       }
       if (my !== seq) return;
-      known = list;
+      known = list.map((t) => t.godzina);
       slotSel.replaceChildren();
       if (!list.length) {
-        add("", dowOf(v) === 0 ? "Niedziela – zamknięte" : "Brak wolnych godzin tego dnia");
+        add("", closedWhy ? `Zamknięte (${closedWhy})` : dowOf(v) === 0 ? "Niedziela – zamknięte" : "Brak wolnych godzin tego dnia");
         slotSel.disabled = true;
         validateDate(dateInp);
         return;
       }
       slotSel.disabled = false;
       add("", "Wybierz godzinę");
-      list.forEach((t) => add(t, t));
-      if (list.includes(prev)) slotSel.value = prev;
+      list.forEach((t) => add(t.godzina, `${t.godzina}–${t.do}`));   // klient od razu widzi, ile potrwa wizyta
+      if (known.includes(prev)) slotSel.value = prev;
+      else if (prev) setErr(slotSel.closest(".fld"), "Przy tym wyborze wizyta trwa inaczej – wybierz godzinę ponownie.");
     };
     dateInp && dateInp.addEventListener("change", () => { fillSlots(); validateDate(dateInp); });
+    // zmiana opcji (np. pakiet, typ pojazdu) zmienia czas wizyty – odświeżamy godziny wybranego dnia
+    $$('input[type="radio"], input[type="checkbox"]:not([name="zgoda"])', form).forEach((i) =>
+      i.addEventListener("change", () => { if (dateInp && dateInp.value && slotSel) fillSlots(); }));
 
     const validateDate = (inp) => {
       const wrap = inp.closest(".fld");
@@ -288,7 +299,10 @@
       if (v > addDays(now.ymd, AHEAD)) { setErr(wrap, MSG.far); return false; }
       const optional = inp.hasAttribute("data-optional");
       if (optional && !HOURS[dowOf(v)]) { setErr(wrap, MSG.sunday); return false; }
-      if (!optional && inp === dateInp && known && !known.length) { setErr(wrap, dowOf(v) === 0 ? MSG.sunday : MSG_NO_SLOTS); return false; }
+      if (!optional && inp === dateInp && known && !known.length) {
+        setErr(wrap, closedWhy ? `Tego dnia jesteśmy zamknięci (${closedWhy}) – wybierz inny dzień.` : dowOf(v) === 0 ? MSG.sunday : MSG_NO_SLOTS);
+        return false;
+      }
       setErr(wrap, "");
       return true;
     };
@@ -399,7 +413,7 @@
         }
         btn.disabled = false;
         btn.innerHTML = label;
-        showDone(form, data);
+        showDone(form, { ...data, godzinaTekst: slotSel && slotSel.value ? slotSel.selectedOptions[0].textContent : "" });
       } catch (err) {
         const ph = form.dataset.phone;
         if (msgBox) {
@@ -415,7 +429,7 @@
   function showDone(form, d) {
     const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
     const rows = [];
-    if (d.data) rows.push(["Termin", `${plDate(d.data)}${d.godzina ? ", " + d.godzina : ""}${d.pora && d.pora !== "Obojętnie" ? ", " + d.pora.toLowerCase() : ""}`]);
+    if (d.data) rows.push(["Termin", `${plDate(d.data)}${d.godzina ? ", " + (d.godzinaTekst || d.godzina) : ""}${d.pora && d.pora !== "Obojętnie" ? ", " + d.pora.toLowerCase() : ""}`]);
     rows.push(["Telefon", d.telefon]);
     if (d.email) rows.push(["E-mail", d.email]);
     const box = document.createElement("div");
@@ -444,7 +458,7 @@
   /* ---------- Rezerwacja: potwierdzenie, płatność nieudana, płatność testowa ---------- */
   const qs = new URLSearchParams(location.search);
   const zl = (gr) => (gr / 100).toLocaleString("pl-PL", { style: "currency", currency: "PLN" });
-  const termText = (r) => (r.data ? `${plDate(r.data)}${r.godzina ? ", " + r.godzina : ""}` : "");
+  const termText = (r) => (r.data ? `${plDate(r.data)}${r.godzina ? ", " + r.godzina + (r.godzinaDo ? "–" + r.godzinaDo : "") : ""}` : "");
   const fillDl = (dl, rows) => {
     dl.replaceChildren();
     rows.filter((r) => r[1]).forEach(([k, v]) => {

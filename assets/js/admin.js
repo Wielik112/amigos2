@@ -10,20 +10,22 @@
   const ymdOf = (d) => new Intl.DateTimeFormat("en-CA", { timeZone: TZ }).format(d);
   const today = () => ymdOf(new Date());
   const addDays = (ymd, n) => { const d = new Date(ymd + "T12:00:00Z"); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
-  const dow = (ymd) => new Date(ymd + "T12:00:00Z").getUTCDay();
-  const mondayOf = (ymd) => addDays(ymd, -((dow(ymd) + 6) % 7));
   const dayFmt = (ymd, opts) => new Date(ymd + "T12:00:00Z").toLocaleDateString("pl-PL", { timeZone: "UTC", ...opts });
   const shortDay = (ymd) => dayFmt(ymd, { weekday: "short", day: "numeric", month: "2-digit" });
   const longDay = (ymd) => dayFmt(ymd, { weekday: "long", day: "numeric", month: "long", year: "numeric" });
   const dateTime = (iso) => iso ? new Date(iso).toLocaleString("pl-PL", { timeZone: TZ, dateStyle: "medium", timeStyle: "short" }) : "";
   const zl = (gr) => (gr / 100).toLocaleString("pl-PL", { style: "currency", currency: "PLN" });
   const phoneFmt = (p) => String(p || "").replace(/^\+48(\d{3})(\d{3})(\d{3})$/, "$1 $2 $3");
+  const toMin = (hm) => { const [h, m] = String(hm).split(":").map(Number); return h * 60 + m; };
+  const fmtMin = (m) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+  const range = (a, b) => (a ? `${a}${b ? "–" + b : ""}` : "");
 
   const STATUS = { pending_payment: "Czeka na płatność", confirmed: "Potwierdzona", expired: "Wygasła", cancelled: "Anulowana" };
   const PAY = { pending: "Oczekuje", succeeded: "Opłacona", failed: "Nieudana", expired: "Wygasła", refunded: "Zwrócona" };
   const LABELS = { pojazd: "Pojazd", badanie: "Badanie", pakiet: "Pakiet", zakres: "Zakres", dodatkowo: "Dodatkowo", sprawa: "Sprawa",
     ubezpieczenie: "Ubezpieczenie", polisa: "Polisa", data: "Kiedy oddzwonić", pora: "Pora dnia", marka: "Marka i model",
     rejestracja: "Nr rejestracyjny", opis: "Opis", problem: "Opis problemu" };
+  const DAYS = ["Poniedziałek", "Wtorek", "Środa", "Czwartek", "Piątek", "Sobota", "Niedziela"];
   const pill = (key, label) => `<span class="pill pill--${esc(key)}">${esc(label)}</span>`;
 
   class ApiError extends Error { constructor(status, msg) { super(msg); this.status = status; } }
@@ -48,9 +50,13 @@
     $("[data-toasts]").append(t);
     setTimeout(() => t.remove(), 8000);
   };
+  const say = (el, text, err) => { if (!el) return; el.textContent = text || ""; el.classList.toggle("is-err", !!err); };
+  const showMsg = (el, text) => { el.textContent = text; el.hidden = !text; };
 
   /* ---------- Widoki: logowanie / aplikacja ---------- */
-  const state = { services: [], tab: "", panel: "rezerwacje", week: mondayOf(today()), graf: null, selected: new Set(), slots: [], lastNotif: null, timer: null };
+  const state = { services: [], resources: [], tab: "", panel: "rezerwacje", day: today(), graf: null, lastNotif: null, timer: null };
+  const slotServices = () => state.services.filter((s) => s.terminy);
+  const svcById = (id) => state.services.find((s) => s.id === Number(id));
 
   function showLogin() {
     clearInterval(state.timer);
@@ -71,8 +77,7 @@
       loginForm.haslo.value = "";
       await start();
     } catch (err) {
-      msg.textContent = err.message;
-      msg.hidden = false;
+      showMsg(msg, err.message);
     } finally { btn.disabled = false; }
   });
 
@@ -81,14 +86,19 @@
     showLogin();
   });
 
+  async function loadMeta() {
+    const [{ uslugi }, { stanowiska }] = await Promise.all([api("uslugi"), api("stanowiska")]);
+    state.services = uslugi;
+    state.resources = stanowiska;
+  }
+
   async function start() {
     const me = await api("me");
     $("[data-user]").textContent = me.admin;
     $("[data-mode]").hidden = me.trybPlatnosci !== "mock";
     $("[data-view=login]").hidden = true;
     $("[data-view=app]").hidden = false;
-    const { uslugi } = await api("uslugi");
-    state.services = uslugi;
+    await loadMeta();
     renderTabs();
     renderGrafSelect();
     route();
@@ -98,20 +108,25 @@
   }
 
   /* ---------- Nawigacja ---------- */
+  const PANELS = ["rezerwacje", "kalendarz", "grafik", "uslugi"];
   function route() {
     const p = (location.hash || "#rezerwacje").slice(1);
-    state.panel = ["rezerwacje", "grafik", "uslugi"].includes(p) ? p : "rezerwacje";
+    state.panel = PANELS.includes(p) ? p : "rezerwacje";
     $$("[data-panel]").forEach((s) => { s.hidden = s.dataset.panel !== state.panel; });
     $$("[data-nav]").forEach((a) => { if (a.dataset.nav === state.panel) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current"); });
+    refreshPanel();
+  }
+  function refreshPanel() {
     if (state.panel === "rezerwacje") loadBookings();
-    if (state.panel === "grafik") loadWeek();
+    if (state.panel === "kalendarz") loadDay();
+    if (state.panel === "grafik") loadSchedule();
     if (state.panel === "uslugi") renderServices();
   }
   window.addEventListener("hashchange", route);
 
   /* ---------- Rezerwacje ---------- */
   const filters = $("[data-filters]");
-  const resetFilters = () => { filters.od.value = today(); filters.do.value = ""; filters.status.value = ""; };
+  const resetFilters = () => { filters.od.value = today(); filters.do.value = ""; filters.status.value = ""; filters.szukaj.value = ""; };
   resetFilters();
 
   function renderTabs() {
@@ -133,22 +148,21 @@
       const d = r.details || {};
       return `<b>Prośba o kontakt</b><small>${d.data ? esc(shortDay(d.data)) : "jak najszybciej"}${d.pora && d.pora !== "Obojętnie" ? ", " + esc(d.pora.toLowerCase()) : ""} · zgłoszono ${esc(dateTime(r.utworzono))}</small>`;
     }
-    return `<b>${esc(shortDay(r.data))}, ${esc(r.godzina)}</b>`;
+    return `<b>${esc(shortDay(r.data))}, ${esc(range(r.godzina, r.godzinaDo))}</b>${r.stanowisko ? `<small>${esc(r.stanowisko)}</small>` : ""}`;
   };
   const payCell = (p) => (p ? `${pill(p.status, PAY[p.status] || p.status)}<small>${esc(zl(p.kwota))}${p.dostawca === "mock" ? " · test" : ""}</small>` : '<small>bez zaliczki</small>');
+  const srcTag = (r) => (r.zrodlo === "telefon" ? ' <span class="pill">telefon</span>' : "");
 
   async function loadBookings() {
     const q = new URLSearchParams();
     if (state.tab) q.set("usluga", state.tab);
-    if (filters.od.value) q.set("od", filters.od.value);
-    if (filters.do.value) q.set("do", filters.do.value);
-    if (filters.status.value) q.set("status", filters.status.value);
+    for (const k of ["od", "do", "status", "szukaj"]) if (filters[k].value) q.set(k, filters[k].value.trim());
     const tbody = $("[data-bookings]");
     let list;
     try { ({ rezerwacje: list } = await api("rezerwacje?" + q)); } catch (e) { if (e.status !== 401) toast("Błąd", e.message); return; }
     tbody.innerHTML = list.map((r) => `<tr tabindex="0" data-id="${esc(r.id)}">
       <td>${whenCell(r)}</td><td>${esc(r.uslugaNazwa)}</td>
-      <td><b>${esc(r.klient)}</b>${r.email ? `<small>${esc(r.email)}</small>` : ""}</td>
+      <td><b>${esc(r.klient)}</b>${srcTag(r)}${r.email ? `<small>${esc(r.email)}</small>` : ""}</td>
       <td><a href="tel:${esc(r.telefon)}">${esc(phoneFmt(r.telefon))}</a></td>
       <td>${pill(r.status, STATUS[r.status] || r.status)}</td><td>${payCell(r.platnosc)}</td></tr>`).join("");
     $("[data-bookings-empty]").hidden = list.length > 0;
@@ -179,16 +193,19 @@
     $("[data-b-body]").innerHTML = `
       ${dl([
         ["Status", pill(r.status, STATUS[r.status] || r.status), true],
-        ["Termin", r.kontakt ? "prośba o kontakt (bez terminu)" : `${longDay(r.data)}, ${r.godzina}–${r.godzinaDo}`],
+        ["Termin", r.kontakt ? "prośba o kontakt (bez terminu)" : `${longDay(r.data)}, ${range(r.godzina, r.godzinaDo)}`],
+        ["Stanowisko", r.stanowisko],
         ["Klient", r.klient],
         ["Telefon", `<a href="tel:${esc(r.telefon)}">${esc(phoneFmt(r.telefon))}</a>`, true],
         ["E-mail", r.email ? `<a href="mailto:${esc(r.email)}">${esc(r.email)}</a>` : "", true],
         ...detailRows,
+        ["Notatka", r.notatki],
       ])}
       <h3>Historia</h3>
       ${dl([
+        ["Źródło", r.zrodlo === "telefon" ? "dodana w panelu" : "rezerwacja online"],
         ["Utworzono", dateTime(r.utworzono)],
-        ["Zgoda RODO", dateTime(r.zgoda)],
+        ["Zgoda RODO", r.zrodlo === "telefon" ? "" : dateTime(r.zgoda)],
         ["Potwierdzono", dateTime(r.potwierdzono)],
         ["Hold do", r.status === "pending_payment" ? dateTime(r.holdDo) : ""],
         ["Anulowano", r.anulowano ? `${dateTime(r.anulowano)} (${r.anulowal || "?"})` : ""],
@@ -202,7 +219,7 @@
   $("[data-b-cancel]").addEventListener("click", () => {
     if (!current) return;
     const paid = current.platnosci.find((p) => p.id === current.aktywnaPlatnosc && p.status === "succeeded");
-    $("[data-c-who]").textContent = `${current.uslugaNazwa}, ${current.kontakt ? "prośba o kontakt" : longDay(current.data) + ", " + current.godzina} – ${current.klient}. Termin wróci do puli wolnych godzin.`;
+    $("[data-c-who]").textContent = `${current.uslugaNazwa}, ${current.kontakt ? "prośba o kontakt" : longDay(current.data) + ", " + range(current.godzina, current.godzinaDo)} – ${current.klient}. Termin wróci do puli wolnych godzin.`;
     const note = $("[data-c-refund]");
     note.hidden = !paid;
     if (paid) note.textContent = paid.dostawca === "stripe"
@@ -222,160 +239,403 @@
       dlgC.close();
       toast("Rezerwacja anulowana", out.zwrot ? " " + out.zwrot.message : " Termin wrócił do puli.");
       openBooking(current.id);
-      if (state.panel === "rezerwacje") loadBookings();
-      if (state.panel === "grafik") loadWeek();
+      refreshPanel();
     } catch (err) {
-      const m = $("[data-c-msg]"); m.textContent = err.message; m.hidden = false;
+      showMsg($("[data-c-msg]"), err.message);
     } finally { btn.disabled = false; }
+  });
+
+  /* ---------- Kalendarz dnia ---------- */
+  const PPM = 1.4;   // pikseli na minutę
+  $$("[data-day]").forEach((b) => b.addEventListener("click", () => { state.day = addDays(state.day, Number(b.dataset.day)); loadDay(); }));
+  $("[data-day-today]").addEventListener("click", () => { state.day = today(); loadDay(); });
+  $("[data-day-pick]").addEventListener("change", (e) => { if (e.target.value) { state.day = e.target.value; loadDay(); } });
+
+  async function loadDay() {
+    let cal;
+    try { cal = await api("kalendarz?dzien=" + state.day); } catch (e) { if (e.status !== 401) toast("Błąd", e.message); return; }
+    $("[data-day-label]").textContent = longDay(cal.dzien) + (cal.dzien === today() ? " (dziś)" : "");
+    $("[data-day-pick]").value = cal.dzien;
+    const closed = Object.entries(cal.zamkniete).map(([id, why]) => `${(svcById(id) || {}).nazwa}: ${why}`);
+    const note = $("[data-day-note]");
+    note.hidden = !closed.length && !cal.swieto;
+    note.textContent = cal.swieto ? `${cal.swieto}. ` : "";
+    if (closed.length) note.textContent += "Zamknięte – " + closed.join(" · ");
+    renderCalendar(cal);
+  }
+
+  function renderCalendar(cal) {
+    const box = $("[data-cal]");
+    const open = toMin(cal.od), close = toMin(cal.do);
+    const height = (close - open) * PPM;
+    const res = cal.stanowiska.filter((r) => r.aktywne || cal.rezerwacje.some((b) => b.stanowisko === r.id));
+    const top = (hm) => (toMin(hm) - open) * PPM;
+    let hours = "";
+    for (let m = open; m <= close; m += 60) hours += `<div class="adm-cal__h" data-y="${(m - open) * PPM}">${fmtMin(m)}</div>`;
+    const lines = Array.from({ length: (close - open) / 30 + 1 }, (_, i) => `<i data-y="${i * 30 * PPM}"${i % 2 ? ' class="is-half"' : ""}></i>`).join("");
+    const cols = res.map((r) => {
+      // godziny pracy stanowiska = suma godzin usług, które obsługuje
+      const win = r.uslugi.flatMap((s) => cal.godzinyPracy[s] || []);
+      const on = win.map(([a, b]) => `<div class="adm-cal__on" data-y="${top(a)}" data-h="${(toMin(b) - toMin(a)) * PPM}"></div>`).join("");
+      const bl = cal.blokady.filter((t) => t.stanowisko === r.id || (t.usluga && r.uslugi.includes(t.usluga))).map((t) => {
+        const a = t.godzina, b = t.godzinaDo === "00:00" ? fmtMin(24 * 60) : t.godzinaDo;
+        return `<button type="button" class="adm-ev adm-ev--block" data-block="${t.id}" data-y="${Math.max(0, top(a))}" data-h="${Math.max(18, (Math.min(close, toMin(b)) - Math.max(open, toMin(a))) * PPM)}"
+          title="Blokada ${esc(range(a, b))}${t.powod ? " – " + esc(t.powod) : ""}"><b>Blokada</b><small>${esc(t.powod || range(a, b))}</small></button>`;
+      }).join("");
+      const ev = cal.rezerwacje.filter((b) => b.stanowisko === r.id).map((b) => {
+        const len = toMin(b.godzinaDo) - toMin(b.godzina);
+        return `<button type="button" class="adm-ev adm-ev--${b.status}" data-booking="${esc(b.id)}" data-y="${top(b.godzina)}" data-h="${Math.max(20, len * PPM)}" data-buf="${b.zapasMin * PPM}"
+          title="${esc(range(b.godzina, b.godzinaDo))} ${esc(b.uslugaNazwa)} – ${esc(b.klient)}"><b>${esc(range(b.godzina, b.godzinaDo))} ${esc(b.klient)}</b><small>${esc(b.uslugaNazwa)}${b.zrodlo === "telefon" ? " · telefon" : ""}${b.status === "pending_payment" ? " · czeka na płatność" : ""}</small></button>`;
+      }).join("");
+      return `<div class="adm-cal__col"><div class="adm-cal__head">${esc(r.nazwa)}${r.aktywne ? "" : " <small>(wyłączone)</small>"}</div>
+        <div class="adm-cal__body" data-res="${r.id}" data-hgt="${height}">${lines}${on}${bl}${ev}</div></div>`;
+    }).join("");
+    box.style.setProperty("--cols", res.length);
+    box.innerHTML = `<div class="adm-cal__col adm-cal__col--time"><div class="adm-cal__head"></div><div class="adm-cal__body" data-hgt="${height}">${hours}</div></div>${cols}`;
+    // pozycje przez CSSOM – CSP strony nie pozwala na atrybuty style w HTML
+    $$("[data-y],[data-hgt]", box).forEach((el) => {
+      const d = el.dataset;
+      if (d.y !== undefined) el.style.setProperty("--y", d.y + "px");
+      if (d.h !== undefined) el.style.setProperty("--h", d.h + "px");
+      if (d.buf !== undefined) el.style.setProperty("--buf", d.buf + "px");
+      if (d.hgt !== undefined) el.style.setProperty("--hgt", d.hgt + "px");
+    });
+
+    $$("[data-booking]", box).forEach((b) => b.addEventListener("click", (e) => { e.stopPropagation(); openBooking(b.dataset.booking); }));
+    $$("[data-block]", box).forEach((b) => b.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      if (!confirm("Usunąć tę blokadę? Ten czas znów będzie dostępny do rezerwacji.")) return;
+      try { await api("blokady/" + b.dataset.block, { method: "DELETE" }); loadDay(); } catch (err) { toast("Błąd", err.message); }
+    }));
+    $$("[data-res]", box).forEach((col) => col.addEventListener("click", (e) => {
+      const y = e.clientY - col.getBoundingClientRect().top;
+      const m = Math.floor((open + y / PPM) / 15) * 15;
+      const r = res.find((x) => String(x.id) === col.dataset.res);
+      const svc = r && r.uslugi.map(svcById).find((s) => s && s.terminy);
+      openAdd({ usluga: svc && svc.id, data: state.day, godzina: fmtMin(m), stanowisko: r && r.id });
+    }));
+  }
+
+  /* ---------- Nowa rezerwacja (z telefonu) ---------- */
+  const dlgA = $("[data-dlg-add]");
+  const addForm = $("[data-add-form]");
+  const typical = (s) => {
+    // typowy czas: pierwsza opcja każdego pola wyboru (np. „Osobowy” + „Okresowe”)
+    let t = s.czasBazowy || 0, min = t, max = t;
+    for (const f of s.pola) {
+      const vals = f.opcje.map((o) => Number((s.czasy[f.nazwa] || {})[o]) || 0);
+      if (f.typ === "checks") { max += vals.reduce((a, b) => a + b, 0); continue; }
+      t += vals[0] || 0; min += Math.min(...vals); max += Math.max(...vals);
+    }
+    return { t: Math.max(10, t), min: Math.max(10, min), max: Math.max(10, max) };
+  };
+  function fillAddResources(pref) {
+    const s = svcById(addForm.usluga.value);
+    const list = state.resources.filter((r) => s && s.stanowiska.includes(r.id) && r.aktywne);
+    addForm.stanowisko.innerHTML = `<option value="">Dowolne wolne</option>` + list.map((r) => `<option value="${r.id}">${esc(r.nazwa)}</option>`).join("");
+    if (pref && list.some((r) => r.id === Number(pref))) addForm.stanowisko.value = String(pref);
+  }
+  function syncLen() {
+    const s = svcById(addForm.usluga.value);
+    if (!s) return;
+    const t = typical(s);
+    addForm.czas.value = t.t;
+    $("[data-a-len-hint]").textContent = t.min === t.max ? "" : `Zwykle ${t.min}–${t.max} min (zależy od zakresu usługi).`;
+  }
+  let addSeq = 0, addPref = null;
+  async function loadAddTimes() {
+    const sel = addForm.godzina;
+    const free = addForm.pozaGrafikiem.checked;
+    $("[data-a-slot]").hidden = free;
+    $("[data-a-free]").hidden = !free;
+    if (free) { if (addPref) addForm.godzinaDowolna.value = addPref; return; }
+    if (!addForm.usluga.value || !addForm.data.value) return;
+    const my = ++addSeq;
+    sel.innerHTML = "<option>Sprawdzam…</option>";
+    sel.disabled = true;
+    const q = new URLSearchParams({ usluga: addForm.usluga.value, dzien: addForm.data.value, czas: addForm.czas.value || "" });
+    if (addForm.stanowisko.value) q.set("stanowisko", addForm.stanowisko.value);
+    let r;
+    try { r = await api("wolne?" + q); } catch (e) { sel.innerHTML = `<option value="">${esc(e.message)}</option>`; return; }
+    if (my !== addSeq) return;
+    sel.disabled = false;
+    if (!r.terminy.length) { sel.innerHTML = `<option value="">${r.zamkniete ? "Zamknięte – " + esc(r.zamkniete) : "Brak wolnego miejsca tego dnia"}</option>`; return; }
+    sel.innerHTML = r.terminy.map((t) => `<option value="${t.godzina}">${t.godzina}–${t.do}${t.wolne > 1 ? ` (wolne: ${t.wolne})` : ""}</option>`).join("");
+    if (addPref) {
+      // z kliknięcia w kalendarzu: najbliższa wolna godzina od klikniętej
+      const hit = r.terminy.find((t) => t.godzina >= addPref) || r.terminy[r.terminy.length - 1];
+      sel.value = hit.godzina;
+    }
+  }
+  function openAdd(pre = {}) {
+    addForm.reset();
+    showMsg($("[data-a-msg]"), "");
+    addForm.usluga.innerHTML = slotServices().map((s) => `<option value="${s.id}">${esc(s.nazwa)}</option>`).join("");
+    if (pre.usluga) addForm.usluga.value = String(pre.usluga);
+    addForm.data.value = pre.data || state.day || today();
+    addPref = pre.godzina || null;
+    fillAddResources(pre.stanowisko);
+    syncLen();
+    loadAddTimes();
+    dlgA.showModal();
+    setTimeout(() => addForm.imie.focus(), 0);
+  }
+  $$("[data-add-booking]").forEach((b) => b.addEventListener("click", () => openAdd({ data: state.panel === "kalendarz" ? state.day : today() })));
+  addForm.usluga.addEventListener("change", () => { fillAddResources(); syncLen(); loadAddTimes(); });
+  ["data", "stanowisko"].forEach((n) => addForm[n].addEventListener("change", loadAddTimes));
+  addForm.czas.addEventListener("change", loadAddTimes);
+  addForm.pozaGrafikiem.addEventListener("change", loadAddTimes);
+  addForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const msg = $("[data-a-msg]");
+    showMsg(msg, "");
+    const free = addForm.pozaGrafikiem.checked;
+    const godzina = free ? addForm.godzinaDowolna.value : addForm.godzina.value;
+    if (!godzina) { showMsg(msg, "Wybierz godzinę."); return; }
+    const btn = $("button[type=submit]", addForm);
+    btn.disabled = true;
+    try {
+      const { rezerwacja: r } = await api("rezerwacje", { method: "POST", body: {
+        usluga: Number(addForm.usluga.value), data: addForm.data.value, godzina, czas: Number(addForm.czas.value),
+        stanowisko: addForm.stanowisko.value ? Number(addForm.stanowisko.value) : null, pozaGrafikiem: free,
+        imie: addForm.imie.value, telefon: addForm.telefon.value, notatka: addForm.notatka.value,
+      } });
+      dlgA.close();
+      toast("Rezerwacja zapisana", ` ${r.klient}, ${shortDay(r.data)} ${range(r.godzina, r.godzinaDo)} · ${r.stanowisko}`, () => openBooking(r.id));
+      refreshPanel();
+    } catch (err) {
+      showMsg(msg, err.message);
+      if (err.status === 409) loadAddTimes();
+    } finally { btn.disabled = false; }
+  });
+
+  /* ---------- Blokada czasu ---------- */
+  const dlgK = $("[data-dlg-block]");
+  const blkForm = $("[data-block-form]");
+  const syncBlk = () => { $("[data-k-hours]").hidden = blkForm.caly.checked; };
+  blkForm.caly.addEventListener("change", syncBlk);
+  function openBlock(pre = {}) {
+    blkForm.reset();
+    showMsg($("[data-k-msg]"), "");
+    blkForm.co.innerHTML = `<optgroup label="Cała usługa">${slotServices().map((s) => `<option value="u${s.id}">${esc(s.nazwa)}</option>`).join("")}</optgroup>
+      <optgroup label="Jedno stanowisko">${state.resources.filter((r) => r.aktywne).map((r) => `<option value="s${r.id}">${esc(r.nazwa)}</option>`).join("")}</optgroup>`;
+    if (pre.usluga) blkForm.co.value = "u" + pre.usluga;
+    blkForm.dzien.value = pre.dzien || state.day || today();
+    syncBlk();
+    dlgK.showModal();
+  }
+  $$("[data-add-block]").forEach((b) => b.addEventListener("click", () => openBlock()));
+  blkForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const v = blkForm.co.value;
+    const btn = $("button[type=submit]", blkForm);
+    btn.disabled = true;
+    try {
+      const out = await api("blokady", { method: "POST", body: {
+        usluga: v[0] === "u" ? Number(v.slice(1)) : null, stanowisko: v[0] === "s" ? Number(v.slice(1)) : null,
+        dzien: blkForm.dzien.value, caly: blkForm.caly.checked, od: blkForm.od.value, do: blkForm.do.value, powod: blkForm.powod.value,
+      } });
+      dlgK.close();
+      toast("Czas zablokowany", out.kolizje ? ` Uwaga: w tym czasie są już umówione wizyty (${out.kolizje}) – zostają, przełóż je ręcznie.` : " Nikt nie zarezerwuje go online.");
+      refreshPanel();
+    } catch (err) { showMsg($("[data-k-msg]"), err.message); } finally { btn.disabled = false; }
   });
 
   /* ---------- Grafik ---------- */
   const grafSel = $("#g-svc");
   function renderGrafSelect() {
-    const withSlots = state.services.filter((s) => s.terminy);
-    grafSel.innerHTML = withSlots.map((s) => `<option value="${s.id}">${esc(s.nazwa)}</option>`).join("");
-    state.graf = state.graf && withSlots.some((s) => s.id === state.graf) ? state.graf : (withSlots[0] || {}).id;
+    const list = slotServices();
+    grafSel.innerHTML = list.map((s) => `<option value="${s.id}">${esc(s.nazwa)}</option>`).join("");
+    state.graf = state.graf && list.some((s) => s.id === state.graf) ? state.graf : (list[0] || {}).id;
     grafSel.value = String(state.graf);
-    syncGenDefaults();
   }
-  grafSel.addEventListener("change", () => { state.graf = Number(grafSel.value); state.selected.clear(); syncGenDefaults(); loadWeek(); });
-  $$("[data-week]").forEach((b) => b.addEventListener("click", () => {
-    state.week = addDays(state.week, 7 * Number(b.dataset.week));
-    state.selected.clear();
-    loadWeek();
-  }));
+  grafSel.addEventListener("change", () => { state.graf = Number(grafSel.value); loadSchedule(); });
 
-  async function loadWeek() {
+  const hoursForm = $("[data-hours]");
+  const rulesForm = $("[data-rules]");
+  const excForm = $("[data-exc-form]");
+
+  async function loadSchedule() {
     if (!state.graf) return;
-    const from = state.week;
-    $("[data-week-label]").textContent = `${dayFmt(from, { day: "numeric", month: "short" })} – ${dayFmt(addDays(from, 6), { day: "numeric", month: "short", year: "numeric" })}`;
-    try { ({ sloty: state.slots } = await api(`sloty?usluga=${state.graf}&od=${from}&dni=7`)); } catch (e) { if (e.status !== 401) toast("Błąd", e.message); return; }
-    renderWeek();
+    let g;
+    try { g = await api("grafik/" + state.graf); } catch (e) { if (e.status !== 401) toast("Błąd", e.message); return; }
+    renderHours(g.godziny);
+    const s = svcById(state.graf);
+    rulesForm.zapas.value = s.zapas;
+    rulesForm.krok.value = String(s.krok);
+    rulesForm.wyprzedzenie.value = s.wyprzedzenie;
+    rulesForm.horyzont.value = s.horyzont;
+    rulesForm.swietaZamkniete.checked = s.swietaZamkniete;
+    say($(".adm-msg", hoursForm), ""); say($(".adm-msg", rulesForm), "");
+
+    $("[data-exc-list]").innerHTML = g.wyjatki.length ? g.wyjatki.map((x) => `<li><span><b>${esc(longDay(x.dzien))}</b>
+        <small>${x.zamkniete ? "zamknięte" : "otwarte " + esc(range(x.od, x.do))}${x.wszystkie ? " · wszystkie usługi" : ""}${x.notatka ? " · " + esc(x.notatka) : ""}</small></span>
+        <button class="adm-link" type="button" data-del-exc="${x.id}">Usuń</button></li>`).join("") : '<li class="adm-empty-li">Brak – działa zwykły grafik.</li>';
+    $("[data-hol-list]").innerHTML = g.swieta.map((h) => {
+      const opened = g.wyjatki.find((x) => x.dzien === h.dzien && !x.zamkniete);
+      return `<li><span><b>${esc(longDay(h.dzien))}</b><small>${esc(h.nazwa)}${!s.swietaZamkniete ? " · otwarte (święta nie zamykają tej usługi)" : opened ? " · otwarte wyjątkowo " + esc(range(opened.od, opened.do)) : ""}</small></span></li>`;
+    }).join("");
+    $("[data-blk-list]").innerHTML = g.blokady.length ? g.blokady.map((t) => `<li><span><b>${esc(longDay(t.dzien))}, ${esc(t.dzienDo !== t.dzien ? "cały dzień" : range(t.od, t.do))}</b>
+        <small>${esc(t.stanowisko || "cała usługa")}${t.powod ? " · " + esc(t.powod) : ""}</small></span>
+        <button class="adm-link" type="button" data-del-blk="${t.id}">Usuń</button></li>`).join("") : '<li class="adm-empty-li">Brak blokad. Dodasz je w Kalendarzu („Zablokuj czas”).</li>';
+    $$("[data-del-exc]").forEach((b) => b.addEventListener("click", async () => { await api("wyjatki/" + b.dataset.delExc, { method: "DELETE" }).catch((e) => toast("Błąd", e.message)); loadSchedule(); }));
+    $$("[data-del-blk]").forEach((b) => b.addEventListener("click", async () => { await api("blokady/" + b.dataset.delBlk, { method: "DELETE" }).catch((e) => toast("Błąd", e.message)); loadSchedule(); }));
   }
 
-  function renderWeek() {
-    const grid = $("[data-week-grid]");
-    const t = today();
-    let html = "";
-    for (let i = 0; i < 7; i++) {
-      const day = addDays(state.week, i);
-      const slots = state.slots.filter((s) => s.data === day);
-      const allBlocked = slots.length && slots.every((s) => s.zablokowany);
-      html += `<div class="adm-day"><div class="adm-day__h${day === t ? " is-today" : ""}"><b>${esc(dayFmt(day, { weekday: "short" }))}</b>${esc(dayFmt(day, { day: "numeric", month: "2-digit" }))}
-        ${slots.length ? `<button class="adm-link" type="button" data-day="${day}" data-block="${allBlocked ? "0" : "1"}">${allBlocked ? "Odblokuj dzień" : "Zablokuj dzień"}</button>` : ""}</div>
-        ${slots.length ? slots.map((s) => {
-          const cls = [s.zablokowany && "is-blocked", s.potwierdzone && "is-booked", !s.potwierdzone && s.wstrzymane && "is-held", s.przeszly && "is-past"].filter(Boolean).join(" ");
-          const used = s.potwierdzone + s.wstrzymane;
-          return `<button class="adm-slot ${cls}" type="button" data-slot="${s.id}" aria-pressed="${state.selected.has(s.id)}"
-            title="${esc(s.godzina)}–${esc(s.godzinaDo)} · zajęte ${used}/${s.pojemnosc}${s.zablokowany ? " · zablokowany" : ""}">${esc(s.godzina)}<small>${used}/${s.pojemnosc}</small></button>`;
-        }).join("") : '<p class="adm-day__none">brak slotów</p>'}</div>`;
-    }
-    grid.innerHTML = html;
-    $$("[data-slot]", grid).forEach((b) => b.addEventListener("click", () => {
-      const id = b.dataset.slot;
-      if (state.selected.has(id)) state.selected.delete(id); else state.selected.add(id);
-      b.setAttribute("aria-pressed", String(state.selected.has(id)));
-      renderSel();
-    }));
-    $$("[data-day]", grid).forEach((b) => b.addEventListener("click", async () => {
-      try {
-        await api("sloty/blokada", { method: "POST", body: { usluga: state.graf, dzien: b.dataset.day, zablokuj: b.dataset.block === "1" } });
-        loadWeek();
-      } catch (e) { toast("Błąd", e.message); }
-    }));
-    renderSel();
+  function renderHours(rows) {
+    $("[data-hours-rows]").innerHTML = DAYS.map((name, i) => {
+      const d = i + 1;
+      const day = rows.filter((r) => r.dzien === d).sort((a, b) => (a.od < b.od ? -1 : 1));
+      const open = day.length > 0;
+      const first = day[0] || { od: "08:00", do: "16:00" }, last = day[day.length - 1] || first;
+      const brk = day.length > 1 ? [day[0].do, day[1].od] : ["", ""];
+      return `<tr data-d="${d}"${open ? "" : ' class="is-off"'}><th>${name}</th>
+        <td><label class="check"><input type="checkbox" data-k="open"${open ? " checked" : ""}><span class="sr">Otwarte</span></label></td>
+        <td><input type="time" data-k="od" value="${first.od}" aria-label="${name} od"></td><td><input type="time" data-k="do" value="${last.do}" aria-label="${name} do"></td>
+        <td><input type="time" data-k="bod" value="${brk[0]}" aria-label="${name} przerwa od"></td><td><input type="time" data-k="bdo" value="${brk[1]}" aria-label="${name} przerwa do"></td></tr>`;
+    }).join("");
+    $$("[data-hours-rows] tr").forEach((tr) => $("[data-k=open]", tr).addEventListener("change", (e) => tr.classList.toggle("is-off", !e.target.checked)));
   }
 
-  function renderSel() {
-    const bar = $("[data-sel]");
-    const n = state.selected.size;
-    bar.hidden = !n;
-    $("[data-sel-n]").textContent = n === 1 ? "Zaznaczono 1 slot" : `Zaznaczono slotów: ${n}`;
-  }
-
-  $$("[data-sel-act]").forEach((b) => b.addEventListener("click", async () => {
-    const act = b.dataset.selAct;
-    const ids = [...state.selected];
-    if (act === "clear") { state.selected.clear(); renderWeek(); return; }
-    try {
-      if (act === "block" || act === "unblock") {
-        await api("sloty/blokada", { method: "POST", body: { ids, zablokuj: act === "block" } });
-      } else if (act === "delete") {
-        if (!confirm(`Usunąć zaznaczone sloty (${ids.length})? Sloty z rezerwacjami zostaną – można je tylko zablokować.`)) return;
-        const errors = [];
-        for (const id of ids) await api("sloty/" + id, { method: "DELETE" }).catch((e) => errors.push(e.message));
-        if (errors.length) toast(`Nie usunięto slotów: ${errors.length}`, " " + errors[0]);
-      }
-      state.selected.clear();
-      loadWeek();
-    } catch (e) { toast("Błąd", e.message); }
-  }));
-
-  const gen = $("[data-gen]");
-  function syncGenDefaults() {
-    const s = state.services.find((x) => x.id === state.graf);
-    if (s) gen.dlugosc.value = s.dlugoscSlotu;
-    if (!gen.od.value) gen.od.value = today();
-    if (!gen.do.value) gen.do.value = addDays(today(), 13);
-  }
-  gen.addEventListener("submit", async (e) => {
+  hoursForm.addEventListener("submit", async (e) => {
     e.preventDefault();
-    const msg = $("[data-gen-msg]");
-    msg.classList.remove("is-err");
-    msg.textContent = "";
-    const btn = $("button[type=submit]", gen);
-    btn.disabled = true;
-    try {
-      const out = await api("sloty/generuj", { method: "POST", body: {
-        usluga: state.graf, od: gen.od.value, do: gen.do.value, dni: $$('input[name="dni"]:checked', gen).map((i) => Number(i.value)),
-        godzinaOd: gen.godzinaOd.value, godzinaDo: gen.godzinaDo.value, dlugosc: Number(gen.dlugosc.value), pojemnosc: Number(gen.pojemnosc.value),
-      } });
-      msg.textContent = out.utworzono ? `Dodano slotów: ${out.utworzono}.` : "Nie dodano nowych slotów – w tym zakresie już istnieją.";
-      if (gen.od.value) state.week = mondayOf(gen.od.value < today() ? today() : gen.od.value);
-      loadWeek();
-    } catch (err) {
-      msg.textContent = err.message;
-      msg.classList.add("is-err");
-    } finally { btn.disabled = false; }
+    const msg = $(".adm-msg", hoursForm);
+    const godziny = [];
+    for (const tr of $$("[data-hours-rows] tr")) {
+      if (!$("[data-k=open]", tr).checked) continue;
+      const v = (k) => $(`[data-k=${k}]`, tr).value;
+      const d = Number(tr.dataset.d);
+      if (v("bod") && v("bdo")) { godziny.push({ dzien: d, od: v("od"), do: v("bod") }, { dzien: d, od: v("bdo"), do: v("do") }); }
+      else godziny.push({ dzien: d, od: v("od"), do: v("do") });
+    }
+    try { await api(`grafik/${state.graf}/godziny`, { method: "PUT", body: { godziny } }); say(msg, "Zapisano."); }
+    catch (err) { say(msg, err.message, true); }
   });
 
-  /* ---------- Ustawienia usług ---------- */
+  rulesForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const msg = $(".adm-msg", rulesForm);
+    try {
+      const { usluga } = await api("uslugi/" + state.graf, { method: "PATCH", body: {
+        zapas: Number(rulesForm.zapas.value), krok: Number(rulesForm.krok.value), wyprzedzenie: Number(rulesForm.wyprzedzenie.value),
+        horyzont: Number(rulesForm.horyzont.value), swietaZamkniete: rulesForm.swietaZamkniete.checked } });
+      state.services = state.services.map((s) => (s.id === usluga.id ? usluga : s));
+      say(msg, "Zapisano.");
+      loadSchedule();
+    } catch (err) { say(msg, err.message, true); }
+  });
+
+  const syncExc = () => { $("[data-exc-hours]").hidden = excForm.zamkniete.checked; };
+  excForm.zamkniete.addEventListener("change", syncExc);
+  excForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const msg = $(".adm-msg", excForm);
+    try {
+      const out = await api("wyjatki", { method: "POST", body: {
+        usluga: state.graf, wszystkie: excForm.zakres.value === "wszystkie", dzien: excForm.dzien.value,
+        zamkniete: excForm.zamkniete.checked, od: excForm.od.value, do: excForm.do.value, notatka: excForm.notatka.value } });
+      say(msg, out.kolizje ? `Zapisano. Uwaga: tego dnia są już umówione wizyty (${out.kolizje}) – zostają, przełóż je ręcznie.` : "Zapisano.", !!out.kolizje);
+      excForm.notatka.value = "";
+      loadSchedule();
+    } catch (err) { say(msg, err.message, true); }
+  });
+  syncExc();
+
+  /* ---------- Usługi i stanowiska ---------- */
   function renderServices() {
     const box = $("[data-services]");
-    box.innerHTML = state.services.map((s) => `<form class="bform adm-card adm-svc" data-svc="${s.id}" novalidate>
-      <div class="adm-svc__head"><div><h2>${esc(s.nazwa)}</h2><p>${s.terminy ? "Rezerwacja terminu" : "Prośba o kontakt – bez terminów"}</p></div>
+    box.innerHTML = state.services.map((s) => {
+      const res = state.resources.map((r) => `<label class="chip"><input type="checkbox" name="stanowiska" value="${r.id}"${s.stanowiska.includes(r.id) ? " checked" : ""}><span>${esc(r.nazwa)}</span></label>`).join("");
+      const dur = s.pola.map((f) => `<tr class="adm-dur__h"><th colspan="2">${esc(LABELS[f.nazwa] || f.nazwa)}${f.typ === "checks" ? " <small>(dolicza się za każdą zaznaczoną)</small>" : ""}</th></tr>` +
+        f.opcje.map((o) => `<tr><td>${esc(o)}</td><td><input type="number" min="0" max="480" step="5" data-f="${esc(f.nazwa)}" data-o="${esc(o)}" value="${Number((s.czasy[f.nazwa] || {})[o]) || 0}" aria-label="${esc(o)} – minuty"> min</td></tr>`).join("")).join("");
+      const t = typical(s);
+      return `<form class="bform adm-card adm-svc" data-svc="${s.id}" novalidate>
+      <div class="adm-svc__head"><div><h2>${esc(s.nazwa)}</h2><p>${s.terminy ? `Wizyta: zwykle ${t.min === t.max ? t.t : t.min + "–" + t.max} min` : "Prośba o kontakt – bez terminów"}</p></div>
       <div class="fld"><label class="check"><input type="checkbox" name="aktywna"${s.aktywna ? " checked" : ""}><span>Aktywna online</span></label></div></div>
       <div class="row2">
         <div class="fld"><label for="s${s.id}-z">Kwota zaliczki (zł)</label><input id="s${s.id}-z" type="number" name="zaliczka" min="0" max="10000" step="0.01" value="${(s.zaliczka / 100).toFixed(2)}"></div>
-        <div class="fld"><label for="s${s.id}-d">Długość slotu (min)</label><input id="s${s.id}-d" type="number" name="dlugoscSlotu" min="5" max="480" step="5" value="${s.dlugoscSlotu}"${s.terminy ? "" : " disabled"}></div>
+        <div class="fld adm-pad"><label class="check"><input type="checkbox" name="zaliczkaWymagana"${s.zaliczkaWymagana ? " checked" : ""}><span>Wymagaj zaliczki</span></label></div>
       </div>
-      <div class="fld"><label class="check"><input type="checkbox" name="zaliczkaWymagana"${s.zaliczkaWymagana ? " checked" : ""}><span>Wymagaj zaliczki przy rezerwacji</span></label></div>
-      ${s.terminy ? '<p class="fld__hint">Nowa długość slotu dotyczy slotów dodanych od teraz – istniejące zostają bez zmian.</p>' : ""}
+      ${s.terminy ? `<fieldset class="fld"><legend>Stanowiska</legend><div class="chips">${res}</div></fieldset>
+      <details class="adm-dur"><summary>Czas trwania wizyty</summary>
+        <p class="fld__hint">Czas = czas bazowy + minuty za wybrane opcje. Klient widzi tylko godziny, w których cała wizyta się mieści.</p>
+        <div class="fld"><label for="s${s.id}-b">Czas bazowy (min)</label><input id="s${s.id}-b" type="number" name="czasBazowy" min="0" max="480" step="5" value="${s.czasBazowy}"></div>
+        <table class="adm-dur__t">${dur}</table>
+        <button class="adm-link" type="button" data-reset-dur>Przywróć domyślne czasy</button>
+      </details>` : ""}
       <div class="adm-actions"><button class="btn btn--blue" type="submit">Zapisz</button><p class="adm-msg" aria-live="polite"></p></div>
-    </form>`).join("");
-    $$("[data-svc]", box).forEach((f) => f.addEventListener("submit", async (e) => {
-      e.preventDefault();
-      const msg = $(".adm-msg", f);
-      msg.classList.remove("is-err");
-      msg.textContent = "";
-      const body = {
-        aktywna: f.aktywna.checked, zaliczkaWymagana: f.zaliczkaWymagana.checked,
-        zaliczka: Math.round(Number(String(f.zaliczka.value).replace(",", ".")) * 100),
-      };
-      if (!f.dlugoscSlotu.disabled) body.dlugoscSlotu = Number(f.dlugoscSlotu.value);
-      try {
-        const { usluga } = await api("uslugi/" + f.dataset.svc, { method: "PATCH", body });
-        state.services = state.services.map((s) => (s.id === usluga.id ? usluga : s));
-        msg.textContent = "Zapisano.";
-        syncGenDefaults();
-      } catch (err) {
-        msg.textContent = err.message;
-        msg.classList.add("is-err");
-        const { uslugi } = await api("uslugi").catch(() => ({ uslugi: state.services }));
-        state.services = uslugi;
-      }
-    }));
+    </form>`;
+    }).join("");
+
+    $$("[data-svc]", box).forEach((f) => {
+      const id = Number(f.dataset.svc);
+      f.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const msg = $(".adm-msg", f);
+        const body = { aktywna: f.aktywna.checked, zaliczkaWymagana: f.zaliczkaWymagana.checked,
+          zaliczka: Math.round(Number(String(f.zaliczka.value).replace(",", ".")) * 100) };
+        if (f.czasBazowy) {
+          body.czasBazowy = Number(f.czasBazowy.value);
+          body.stanowiska = $$('input[name="stanowiska"]:checked', f).map((i) => Number(i.value));
+          body.czasy = {};
+          $$("[data-f]", f).forEach((i) => { (body.czasy[i.dataset.f] = body.czasy[i.dataset.f] || {})[i.dataset.o] = Number(i.value) || 0; });
+        }
+        try {
+          const { usluga } = await api("uslugi/" + id, { method: "PATCH", body });
+          state.services = state.services.map((s) => (s.id === usluga.id ? usluga : s));
+          say(msg, "Zapisano.");
+          const t = typical(usluga);
+          const p = $(".adm-svc__head p", f);
+          if (usluga.terminy) p.textContent = `Wizyta: zwykle ${t.min === t.max ? t.t : t.min + "–" + t.max} min`;
+        } catch (err) { say(msg, err.message, true); }
+      });
+      const reset = $("[data-reset-dur]", f);
+      reset && reset.addEventListener("click", async () => {
+        if (!confirm("Przywrócić domyślne czasy z pliku ustawień? Obecne czasy tej usługi zostaną zastąpione.")) return;
+        try {
+          const { usluga } = await api(`uslugi/${id}/domyslne-czasy`, { method: "POST" });
+          state.services = state.services.map((s) => (s.id === usluga.id ? usluga : s));
+          renderServices();
+          toast("Przywrócono domyślne czasy", " " + usluga.nazwa);
+        } catch (err) { toast("Błąd", err.message); }
+      });
+    });
+    renderResources();
   }
+
+  function renderResources() {
+    $("[data-res-list]").innerHTML = state.resources.map((r) => `<li data-res-id="${r.id}"><form class="bform adm-res" novalidate>
+      <input type="text" name="nazwa" value="${esc(r.nazwa)}" maxlength="60" aria-label="Nazwa stanowiska">
+      <label class="check"><input type="checkbox" name="aktywne"${r.aktywne ? " checked" : ""}><span>aktywne</span></label>
+      <small>${esc(r.uslugi.map((id) => (svcById(id) || {}).nazwa).filter(Boolean).join(", ") || "nie przypisane do usługi")}</small>
+      <button class="btn btn--ghost" type="submit">Zapisz</button><button class="adm-link" type="button" data-del-res>Usuń</button></form></li>`).join("");
+    $$("[data-res-id]").forEach((li) => {
+      const id = li.dataset.resId, f = $("form", li);
+      f.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        try { ({ stanowiska: state.resources } = await api("stanowiska/" + id, { method: "PATCH", body: { nazwa: f.nazwa.value, aktywne: f.aktywne.checked } })); toast("Zapisano stanowisko", " " + f.nazwa.value); }
+        catch (err) { toast("Błąd", err.message); }
+      });
+      $("[data-del-res]", li).addEventListener("click", async () => {
+        if (!confirm("Usunąć to stanowisko?")) return;
+        try { ({ stanowiska: state.resources } = await api("stanowiska/" + id, { method: "DELETE" })); await loadMeta(); renderServices(); }
+        catch (err) { toast("Nie usunięto", " " + err.message); }
+      });
+    });
+    $("[data-res-svcs]").innerHTML = slotServices().map((s) => `<label class="chip"><input type="checkbox" name="uslugi" value="${s.id}"><span>${esc(s.nazwa)}</span></label>`).join("");
+  }
+
+  $("[data-res-form]").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const f = e.target, msg = $(".adm-msg", f);
+    try {
+      await api("stanowiska", { method: "POST", body: { nazwa: f.nazwa.value, uslugi: $$('input[name="uslugi"]:checked', f).map((i) => Number(i.value)) } });
+      f.reset();
+      await loadMeta();
+      renderServices();
+      say($(".adm-msg", $("[data-res-form]")), "Dodano.");
+    } catch (err) { say(msg, err.message, true); }
+  });
 
   /* ---------- Powiadomienia (polling co 20 s) ---------- */
   const bell = $("[data-bell]");
@@ -413,11 +673,11 @@
       n.lista.filter((x) => Number(x.id) > state.lastNotif && !x.przeczytane).reverse().forEach((x) => {
         toast(`${NOTIF[x.typ] || x.typ}: ${x.usluga}`, ` ${x.klient}${x.data ? ", " + shortDay(x.data) + " " + x.godzina : ""}`, () => openBooking(x.rezerwacja));
       });
-      if (newest > state.lastNotif && state.panel === "rezerwacje") loadBookings();
+      if (newest > state.lastNotif && (state.panel === "rezerwacje" || state.panel === "kalendarz")) refreshPanel();
     }
     state.lastNotif = Math.max(state.lastNotif || 0, newest);
   }
 
   /* ---------- Start ---------- */
-  start().catch((e) => { if (e.status !== 401) { showLogin(); const m = $("[data-login-msg]"); m.textContent = e.message; m.hidden = false; } });
+  start().catch((e) => { if (e.status !== 401) { showLogin(); showMsg($("[data-login-msg]"), e.message); } });
 })();

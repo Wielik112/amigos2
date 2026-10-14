@@ -1003,8 +1003,6 @@ def build_admin():
     """Panel rezerwacji (/admin) – osobny szablon, ale te same tokeny i komponenty co landing."""
     brand = ('<a class="brand" href="/admin"><img src="/assets/img/logo-96.webp" width="42" height="42" alt="">'
              '<span class="brand__txt"><b>Amigos Staweccy</b><small>Panel rezerwacji</small></span></a>')
-    days = "".join(f'<label class="chip"><input type="checkbox" name="dni" value="{i}"{" checked" if i < 7 else ""}><span>{d}</span></label>'
-                   for i, d in enumerate(["Pn", "Wt", "Śr", "Cz", "Pt", "Sb", "Nd"], 1))
     html = f'''<!doctype html>
 <html lang="pl">
 <head>
@@ -1036,7 +1034,7 @@ def build_admin():
 <div data-view="app" hidden>
 <header class="hdr adm-hdr"><div class="wrap hdr__in">
 {brand}
-<nav class="adm-nav" aria-label="Panel"><a href="#rezerwacje" data-nav="rezerwacje">Rezerwacje</a><a href="#grafik" data-nav="grafik">Grafik</a><a href="#uslugi" data-nav="uslugi">Usługi</a></nav>
+<nav class="adm-nav" aria-label="Panel"><a href="#rezerwacje" data-nav="rezerwacje">Rezerwacje</a><a href="#kalendarz" data-nav="kalendarz">Kalendarz</a><a href="#grafik" data-nav="grafik">Grafik</a><a href="#uslugi" data-nav="uslugi">Usługi</a></nav>
 <div class="adm-hdr__end">
 <div class="adm-bell">
 <button class="adm-bell__btn" type="button" aria-expanded="false" aria-label="Powiadomienia" data-bell>{icon("bell")}<span class="adm-bell__n" data-bell-n hidden>0</span></button>
@@ -1051,9 +1049,10 @@ def build_admin():
 <main class="adm-main"><div class="wrap">
 
 <section data-panel="rezerwacje" aria-labelledby="h-rez">
-<div class="adm-head"><h1 class="h2" id="h-rez">Rezerwacje</h1></div>
+<div class="adm-head"><h1 class="h2" id="h-rez">Rezerwacje</h1><button class="btn btn--red" type="button" data-add-booking>+ Dodaj rezerwację</button></div>
 <div class="tabs" role="tablist" aria-label="Usługa" data-svc-tabs></div>
 <form class="bform adm-card adm-filters" data-filters>
+<div class="fld"><label for="f-q">Szukaj</label><input id="f-q" type="text" name="szukaj" placeholder="telefon, nr rej., imię" maxlength="40"></div>
 <div class="fld"><label for="f-od">Od</label><input id="f-od" type="date" name="od"></div>
 <div class="fld"><label for="f-do">Do <span class="opt">opcjonalnie</span></label><input id="f-do" type="date" name="do"></div>
 <div class="fld"><label for="f-st">Status</label><select id="f-st" name="status"><option value="">Wszystkie</option><option value="confirmed">Potwierdzone</option><option value="pending_payment">Czekają na płatność</option><option value="cancelled">Anulowane</option><option value="expired">Wygasłe</option></select></div>
@@ -1064,32 +1063,73 @@ def build_admin():
 <tbody data-bookings></tbody></table></div><p class="adm-empty" data-bookings-empty hidden>Brak rezerwacji dla wybranych filtrów.</p></div>
 </section>
 
+<section data-panel="kalendarz" aria-labelledby="h-kal" hidden>
+<div class="adm-head"><h1 class="h2" id="h-kal">Kalendarz dnia</h1>
+<div class="adm-actions"><button class="btn btn--red" type="button" data-add-booking>+ Dodaj rezerwację</button><button class="btn btn--ghost" type="button" data-add-block>Zablokuj czas</button></div></div>
+<div class="adm-card">
+<div class="adm-week__nav"><button class="btn btn--ghost" type="button" data-day="-1" aria-label="Poprzedni dzień">‹</button>
+<div class="adm-day-pick"><b data-day-label></b><form class="bform"><input type="date" data-day-pick aria-label="Wybierz dzień"></form><button class="adm-link" type="button" data-day-today>Dziś</button></div>
+<button class="btn btn--ghost" type="button" data-day="1" aria-label="Następny dzień">›</button></div>
+<p class="adm-note" data-day-note hidden></p>
+<div class="adm-scroll"><div class="adm-cal" data-cal></div></div>
+<div class="adm-legend"><span><i class="is-booked"></i>potwierdzona</span><span><i class="is-held"></i>czeka na płatność</span><span><i class="is-blocked"></i>blokada</span><span><i class="is-off"></i>poza godzinami pracy</span><span>Kliknij wolne miejsce, żeby dodać rezerwację.</span></div>
+</div>
+</section>
+
 <section data-panel="grafik" aria-labelledby="h-graf" hidden>
-<div class="adm-head"><h1 class="h2" id="h-graf">Grafik i terminy</h1>
+<div class="adm-head"><h1 class="h2" id="h-graf">Grafik</h1>
 <form class="bform" data-graf-svc><div class="fld"><label for="g-svc">Usługa</label><select id="g-svc" name="usluga"></select></div></form></div>
 <div class="adm-grid2">
-<div class="adm-card">
-<div class="adm-week__nav"><button class="btn btn--ghost" type="button" data-week="-1" aria-label="Poprzedni tydzień">‹ Poprzedni</button><b data-week-label></b><button class="btn btn--ghost" type="button" data-week="1" aria-label="Następny tydzień">Następny ›</button></div>
-<div class="adm-week" data-week-grid></div>
-<div class="adm-legend"><span><i></i>wolny</span><span><i class="is-held"></i>czeka na płatność</span><span><i class="is-booked"></i>zarezerwowany</span><span><i class="is-blocked"></i>zablokowany</span><span>Kliknij sloty, żeby je zaznaczyć.</span></div>
-<div class="adm-sel" data-sel hidden><span data-sel-n></span><button class="btn btn--red" type="button" data-sel-act="block">Zablokuj</button><button class="btn btn--ghost" type="button" data-sel-act="unblock">Odblokuj</button><button class="btn btn--ghost" type="button" data-sel-act="delete">Usuń</button><button class="adm-link" type="button" data-sel-act="clear">Odznacz</button></div>
-</div>
-<form class="bform adm-card" data-gen novalidate>
-<h2>Generator slotów</h2>
-<div class="row2"><div class="fld"><label for="gen-od">Od dnia</label><input id="gen-od" type="date" name="od" required></div><div class="fld"><label for="gen-do">Do dnia</label><input id="gen-do" type="date" name="do" required></div></div>
-<fieldset class="fld"><legend>Dni tygodnia</legend><div class="chips">{days}</div></fieldset>
-<div class="row2"><div class="fld"><label for="gen-god">Godzina od</label><input id="gen-god" type="time" name="godzinaOd" value="08:00" required></div><div class="fld"><label for="gen-gdo">Godzina do</label><input id="gen-gdo" type="time" name="godzinaDo" value="20:00" required></div></div>
-<div class="row2"><div class="fld"><label for="gen-len">Długość slotu (min)</label><input id="gen-len" type="number" name="dlugosc" min="5" max="480" step="5" value="30" required></div><div class="fld"><label for="gen-cap">Pojemność</label><input id="gen-cap" type="number" name="pojemnosc" min="1" max="50" value="1" required></div></div>
-<p class="fld__hint">Istniejące sloty zostają bez zmian – generator dodaje tylko brakujące. Godziny w czasie polskim.</p>
-<button class="btn btn--red" type="submit">Generuj sloty</button>
-<p class="adm-msg" data-gen-msg aria-live="polite"></p>
+<form class="bform adm-card" data-hours novalidate>
+<h2>Godziny pracy</h2>
+<div class="adm-scroll"><table class="adm-hours"><thead><tr><th>Dzień</th><th>Otwarte</th><th>Od</th><th>Do</th><th>Przerwa od</th><th>Przerwa do</th></tr></thead><tbody data-hours-rows></tbody></table></div>
+<p class="fld__hint">Godziny dotyczą nowych rezerwacji – już zapisane wizyty zostają na swoich miejscach. Przerwę zostaw pustą, jeśli jej nie ma.</p>
+<div class="adm-actions"><button class="btn btn--blue" type="submit">Zapisz godziny</button><p class="adm-msg" aria-live="polite"></p></div>
 </form>
+<form class="bform adm-card" data-rules novalidate>
+<h2>Zasady zapisów</h2>
+<div class="fld"><label for="r-buf">Zapas po każdej wizycie (min)</label><input id="r-buf" type="number" name="zapas" min="0" max="120" step="5"><p class="fld__hint">Czas na sprzątnięcie stanowiska i spóźnienia.</p></div>
+<div class="fld"><label for="r-step">Godziny startu co</label><select id="r-step" name="krok"><option value="5">5 min</option><option value="10">10 min</option><option value="15">15 min</option><option value="20">20 min</option><option value="30">30 min</option><option value="60">60 min</option></select></div>
+<div class="fld"><label for="r-not">Najwcześniej za (min)</label><input id="r-not" type="number" name="wyprzedzenie" min="0" max="10080" step="15"><p class="fld__hint">Np. 120 = klient nie zapisze się na najbliższe 2 godziny.</p></div>
+<div class="fld"><label for="r-hor">Zapisy na ile dni do przodu</label><input id="r-hor" type="number" name="horyzont" min="1" max="365"></div>
+<div class="fld"><label class="check"><input type="checkbox" name="swietaZamkniete"><span>Zamknięte w dni ustawowo wolne (automatycznie)</span></label></div>
+<div class="adm-actions"><button class="btn btn--blue" type="submit">Zapisz zasady</button><p class="adm-msg" aria-live="polite"></p></div>
+</form>
+</div>
+<div class="adm-grid2">
+<div class="adm-card">
+<h2>Dni wolne i zmienione godziny</h2>
+<form class="bform adm-exc" data-exc-form novalidate>
+<div class="row2"><div class="fld"><label for="e-day">Dzień</label><input id="e-day" type="date" name="dzien" required></div>
+<div class="fld"><label for="e-scope">Dotyczy</label><select id="e-scope" name="zakres"><option value="usluga">tej usługi</option><option value="wszystkie">wszystkich usług</option></select></div></div>
+<div class="fld"><label class="check"><input type="checkbox" name="zamkniete" checked><span>Zamknięte cały dzień</span></label></div>
+<div class="row2" data-exc-hours hidden><div class="fld"><label for="e-od">Otwarte od</label><input id="e-od" type="time" name="od" value="08:00"></div><div class="fld"><label for="e-do">do</label><input id="e-do" type="time" name="do" value="14:00"></div></div>
+<div class="fld"><label for="e-note">Opis <span class="opt">opcjonalnie</span></label><input id="e-note" type="text" name="notatka" maxlength="120" placeholder="np. inwentaryzacja, urlop"></div>
+<div class="adm-actions"><button class="btn btn--blue" type="submit">Dodaj</button><p class="adm-msg" aria-live="polite"></p></div>
+</form>
+<ul class="adm-list" data-exc-list></ul>
+</div>
+<div class="adm-card">
+<h2>Święta (zamknięte automatycznie)</h2>
+<p class="fld__hint">Żeby pracować w święto, dodaj obok „zmienione godziny” na ten dzień.</p>
+<ul class="adm-list" data-hol-list></ul>
+<h2 class="adm-mt">Blokady czasu</h2>
+<ul class="adm-list" data-blk-list></ul>
+</div>
 </div>
 </section>
 
 <section data-panel="uslugi" aria-labelledby="h-usl" hidden>
-<div class="adm-head"><h1 class="h2" id="h-usl">Ustawienia usług</h1><p>Zmiany działają od razu dla nowych rezerwacji.</p></div>
+<div class="adm-head"><h1 class="h2" id="h-usl">Usługi i stanowiska</h1><p>Zmiany działają od razu dla nowych rezerwacji.</p></div>
 <div class="adm-svcs" data-services></div>
+<div class="adm-card" data-resources-card>
+<h2>Stanowiska</h2>
+<p class="fld__hint">Stanowisko obsługujące kilka usług (np. biuro) jest zajęte dla wszystkich, gdy ktoś jest umówiony na jedną z nich.</p>
+<ul class="adm-list" data-res-list></ul>
+<form class="bform adm-res-add" data-res-form novalidate><div class="fld"><label for="res-n">Nowe stanowisko</label><input id="res-n" type="text" name="nazwa" maxlength="60" placeholder="np. Myjnia – stanowisko 3"></div>
+<fieldset class="fld"><legend>Obsługuje</legend><div class="chips" data-res-svcs></div></fieldset>
+<div class="adm-actions"><button class="btn btn--blue" type="submit">Dodaj stanowisko</button><p class="adm-msg" aria-live="polite"></p></div></form>
+</div>
 </section>
 
 </div></main>
@@ -1107,6 +1147,33 @@ def build_admin():
 <p class="adm-note" data-c-refund hidden></p>
 <div class="adm-actions"><button class="btn btn--red" type="submit" value="ok">Tak, anuluj rezerwację</button><button class="btn btn--ghost" type="button" data-close>Nie</button></div>
 <p class="bform__msg" role="alert" hidden data-c-msg></p>
+</form></dialog>
+
+<dialog class="adm-dlg" data-dlg-add aria-labelledby="dlg-a-h"><form class="bform adm-dlg__in" data-add-form novalidate>
+<div class="adm-dlg__head"><h2 id="dlg-a-h">Nowa rezerwacja</h2><button class="adm-x" type="button" data-close aria-label="Zamknij">×</button></div>
+<p class="fld__hint">Np. z telefonu albo dla klienta na miejscu. Termin od razu znika z rezerwacji online.</p>
+<div class="row2"><div class="fld"><label for="a-svc">Usługa</label><select id="a-svc" name="usluga"></select></div><div class="fld"><label for="a-day">Dzień</label><input id="a-day" type="date" name="data" required></div></div>
+<div class="row2"><div class="fld"><label for="a-len">Czas wizyty (min)</label><input id="a-len" type="number" name="czas" min="5" max="600" step="5" required><p class="fld__hint" data-a-len-hint></p></div>
+<div class="fld"><label for="a-res">Stanowisko</label><select id="a-res" name="stanowisko"></select></div></div>
+<div class="fld" data-a-slot><label for="a-time">Godzina</label><select id="a-time" name="godzina"></select></div>
+<div class="fld" data-a-free hidden><label for="a-free">Godzina (dowolna)</label><input id="a-free" type="time" name="godzinaDowolna" step="300"></div>
+<div class="fld"><label class="check"><input type="checkbox" name="pozaGrafikiem"><span>Poza grafikiem (np. po godzinach, w dzień wolny)</span></label></div>
+<div class="row2"><div class="fld"><label for="a-name">Imię klienta</label><input id="a-name" type="text" name="imie" maxlength="60" required></div><div class="fld"><label for="a-tel">Telefon</label><input id="a-tel" type="tel" name="telefon" maxlength="20" placeholder="np. 600 100 200" required></div></div>
+<div class="fld"><label for="a-note">Notatka <span class="opt">opcjonalnie</span></label><input id="a-note" type="text" name="notatka" maxlength="300" placeholder="np. Passat, wymiana opon po badaniu"></div>
+<div class="adm-actions"><button class="btn btn--red" type="submit">Zapisz rezerwację</button><button class="btn btn--ghost" type="button" data-close>Anuluj</button></div>
+<p class="bform__msg" role="alert" hidden data-a-msg></p>
+</form></dialog>
+
+<dialog class="adm-dlg" data-dlg-block aria-labelledby="dlg-k-h"><form class="bform adm-dlg__in" data-block-form novalidate>
+<div class="adm-dlg__head"><h2 id="dlg-k-h">Zablokuj czas</h2><button class="adm-x" type="button" data-close aria-label="Zamknij">×</button></div>
+<p class="fld__hint">W zablokowanym czasie nikt nie zarezerwuje terminu online (np. awaria, szkolenie, prywatna sprawa).</p>
+<div class="fld"><label for="k-what">Co blokujesz</label><select id="k-what" name="co"></select></div>
+<div class="row2"><div class="fld"><label for="k-day">Dzień</label><input id="k-day" type="date" name="dzien" required></div>
+<div class="fld"><label class="check adm-check-pad"><input type="checkbox" name="caly"><span>Cały dzień</span></label></div></div>
+<div class="row2" data-k-hours><div class="fld"><label for="k-od">Od</label><input id="k-od" type="time" name="od" value="10:00"></div><div class="fld"><label for="k-do">Do</label><input id="k-do" type="time" name="do" value="12:00"></div></div>
+<div class="fld"><label for="k-why">Powód <span class="opt">opcjonalnie</span></label><input id="k-why" type="text" name="powod" maxlength="120"></div>
+<div class="adm-actions"><button class="btn btn--red" type="submit">Zablokuj</button><button class="btn btn--ghost" type="button" data-close>Anuluj</button></div>
+<p class="bform__msg" role="alert" hidden data-k-msg></p>
 </form></dialog>
 
 <div class="adm-toasts" data-toasts aria-live="polite"></div>
