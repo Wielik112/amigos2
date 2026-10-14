@@ -203,7 +203,7 @@
     phone: "Podaj 9-cyfrowy numer telefonu, np. 600 100 200.",
     email: "Sprawdź adres e-mail – brakuje @ albo domeny.",
     name: "Podaj imię (co najmniej 2 litery).",
-    date: "Wybierz dzień wizyty.",
+    date: "Wybierz dzień, w którym jesteśmy otwarci.",
     past: "Ten dzień już minął – wybierz późniejszy.",
     far: `Rezerwujemy maksymalnie ${AHEAD} dni do przodu.`,
     sunday: "W niedzielę jesteśmy zamknięci – wybierz inny dzień.",
@@ -212,13 +212,12 @@
 
   // Wolne godziny z systemu rezerwacji (cache na dzień; po „termin zajęty” pobieramy od nowa)
   const slotCache = new Map();
-  // opts: wybrane opcje formularza (wpływają na czas wizyty, więc i na listę godzin)
-  const fetchSlots = (slug, ymd, fresh, opts) => {
-    const key = slug + "|" + ymd + "|" + opts;
+  const fetchSlots = (slug, ymd, fresh) => {
+    const key = slug + "|" + ymd;
     if (!fresh && slotCache.has(key)) return slotCache.get(key);
-    const p = fetch(`/api/terminy?usluga=${encodeURIComponent(slug)}&dzien=${ymd}${opts ? "&" + opts : ""}`, { headers: { Accept: "application/json" } })
+    const p = fetch(`/api/terminy?usluga=${encodeURIComponent(slug)}&dzien=${ymd}`, { headers: { Accept: "application/json" } })
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
-      .then((j) => ({ list: j.terminy || [], closed: j.zamkniete || null }));
+      .then((j) => (j.terminy || []).map((t) => t.godzina));
     slotCache.set(key, p);
     p.catch(() => slotCache.delete(key));
     return p;
@@ -247,18 +246,9 @@
     const slotSel = $("[data-slots]", form);
     const slug = ($('input[name="usluga"]', form) || {}).value || "";
     let known = null;   // wolne godziny wybranego dnia (null = jeszcze nie wiemy)
-    let closedWhy = null;
     let seq = 0;
-    const optParams = () => {
-      const p = new URLSearchParams();
-      $$('input[type="radio"]:checked, input[type="checkbox"]:checked', form).forEach((i) => { if (i.name !== "zgoda" && i.name[0] !== "_") p.append(i.name, i.value); });
-      return p.toString();
-    };
-    let renderHours = null;   // ustawiane przez kalendarz terminów (niżej)
-    let lastList = null;
     const fillSlots = async (fresh) => {
       if (!dateInp || !slotSel) return;
-      renderHours && renderHours(null);
       const v = dateInp.value;
       const prev = slotSel.value;
       const my = ++seq;
@@ -269,144 +259,26 @@
       add("", "Sprawdzam wolne godziny…");
       slotSel.disabled = true;
       let list;
-      try { ({ list, closed: closedWhy } = await fetchSlots(slug, v, fresh, optParams())); } catch (e) {
+      try { list = await fetchSlots(slug, v, fresh); } catch (e) {
         if (my !== seq) return;
         slotSel.replaceChildren(); add("", "Nie udało się pobrać godzin – wybierz dzień ponownie");
         return;
       }
       if (my !== seq) return;
-      lastList = list;
-      known = list.map((t) => t.godzina);
+      known = list;
       slotSel.replaceChildren();
       if (!list.length) {
-        add("", closedWhy ? `Zamknięte (${closedWhy})` : dowOf(v) === 0 ? "Niedziela – zamknięte" : "Brak wolnych godzin tego dnia");
+        add("", dowOf(v) === 0 ? "Niedziela – zamknięte" : "Brak wolnych godzin tego dnia");
         slotSel.disabled = true;
         validateDate(dateInp);
-        renderHours && renderHours(list);
         return;
       }
       slotSel.disabled = false;
       add("", "Wybierz godzinę");
-      list.forEach((t) => add(t.godzina, `${t.godzina}–${t.do}`));   // klient od razu widzi, ile potrwa wizyta
-      if (known.includes(prev)) slotSel.value = prev;
-      else if (prev) setErr(slotSel.closest(".fld"), "Przy tym wyborze wizyta trwa inaczej – wybierz godzinę ponownie.");
-      renderHours && renderHours(list);
+      list.forEach((t) => add(t, t));
+      if (list.includes(prev)) slotSel.value = prev;
     };
     dateInp && dateInp.addEventListener("change", () => { fillSlots(); validateDate(dateInp); });
-    // zmiana opcji (np. pakiet, typ pojazdu) zmienia czas wizyty – odświeżamy godziny wybranego dnia
-    $$('input[type="radio"], input[type="checkbox"]:not([name="zgoda"])', form).forEach((i) =>
-      i.addEventListener("change", () => { if (dateInp && dateInp.value && slotSel) fillSlots(); }));
-
-    /* Kalendarz terminów: dni z wolnymi godzinami + godziny jako przyciski. Prawdziwe pola daty i godziny
-       zostają w formularzu (ukryte), więc wysyłka i walidacja działają jak wcześniej. */
-    const slotRow = dateInp && slotSel && dateInp.closest(".row2--slot");
-    if (slotRow && window.IntersectionObserver) {
-      const legend = ($(`label[for="${dateInp.id}"]`, slotRow) || {}).firstChild;
-      const pick = document.createElement("fieldset");
-      pick.className = "fld slotpick";
-      pick.innerHTML = `<legend>${legend ? legend.textContent.trim() : "Termin"} <span class="req" aria-hidden="true">*</span></legend>
-        <button type="button" class="slotpick__soon" hidden></button>
-        <div class="cal"><div class="cal__nav"><button type="button" data-m="-1" aria-label="Poprzedni miesiąc">‹</button><b aria-live="polite"></b>
-        <button type="button" data-m="1" aria-label="Następny miesiąc">›</button></div><div class="cal__grid"><p class="slotpick__empty cal__wait">Wczytuję wolne terminy…</p></div></div>
-        <div class="slotpick__hours" hidden><p class="slotpick__h"></p><div class="chips"></div></div>
-        <p class="fld__err" aria-live="polite"></p>`;
-      const home = [[dateInp, dateInp.parentNode, dateInp.nextSibling], [slotSel, slotSel.parentNode, slotSel.nextSibling]];
-      slotRow.hidden = true;
-      slotRow.after(pick);
-      dateInp.hidden = slotSel.hidden = true;
-      pick.append(dateInp, slotSel);
-      const grid = $(".cal__grid", pick), monthEl = $(".cal__nav b", pick), soon = $(".slotpick__soon", pick);
-      const hoursBox = $(".slotpick__hours", pick), chips = $(".chips", pick);
-      let days = null, month = null, last = null, daysSeq = 0;
-      const ymdHtml = (d) => plDate(d);
-      const firstFree = () => days && Object.keys(days).find((d) => days[d].wolne > 0);
-
-      const fallback = () => {   // brak połączenia z API – wracamy do zwykłych pól
-        home.forEach(([el, parent, next]) => { el.hidden = false; parent.insertBefore(el, next); });
-        slotRow.hidden = false;
-        pick.remove();
-        renderHours = null;
-      };
-
-      const render = () => {
-        if (!days) return;
-        const [y, m] = month.split("-").map(Number);
-        const first = `${month}-01`, lead = (dowOf(first) + 6) % 7, dim = new Date(Date.UTC(y, m, 0)).getUTCDate();
-        monthEl.textContent = new Date(first + "T12:00:00Z").toLocaleDateString("pl-PL", { month: "long", year: "numeric", timeZone: "UTC" });
-        $('[data-m="-1"]', pick).disabled = month <= now.ymd.slice(0, 7);
-        $('[data-m="1"]', pick).disabled = month >= last.slice(0, 7);
-        let html = ["Pn", "Wt", "Śr", "Cz", "Pt", "Sb", "Nd"].map((d) => `<span class="cal__dow" aria-hidden="true">${d}</span>`).join("");
-        html += "<span></span>".repeat(lead);
-        for (let i = 1; i <= dim; i++) {
-          const d = `${month}-${String(i).padStart(2, "0")}`, info = days[d], n = info ? info.wolne : 0;
-          const why = info && info.zamkniete ? info.zamkniete : n ? `wolne terminy: ${n}` : info ? "brak wolnych terminów" : "";
-          html += `<button type="button" class="cal__day${d === now.ymd ? " is-today" : ""}${n && n <= 3 ? " is-few" : ""}" data-d="${d}"
-            aria-pressed="${d === dateInp.value}" aria-label="${ymdHtml(d)}${why ? ", " + why : ""}"${why ? ` title="${why}"` : ""}${n ? "" : " disabled"}>${i}</button>`;
-        }
-        grid.innerHTML = html;
-        const f = firstFree();
-        soon.hidden = !f || f === dateInp.value;
-        if (f) soon.textContent = `Najbliższy wolny termin: ${plDate(f)}, ${days[f].pierwsza}`;
-      };
-
-      const loadDays = async () => {
-        const my = ++daysSeq, opts = optParams();
-        pick.classList.add("is-loading");
-        let r;
-        try {
-          r = await fetch(`/api/terminy?usluga=${encodeURIComponent(slug)}&dni=1${opts ? "&" + opts : ""}`, { headers: { Accept: "application/json" } })
-            .then((x) => (x.ok ? x.json() : Promise.reject(new Error(String(x.status)))));
-        } catch (e) { if (my === daysSeq && !days) fallback(); return; } finally { if (my === daysSeq) pick.classList.remove("is-loading"); }
-        if (my !== daysSeq) return;
-        days = r.dni;
-        last = r.do || addDays(now.ymd, AHEAD);
-        if (!month) month = (dateInp.value || firstFree() || now.ymd).slice(0, 7);
-        render();
-        const sel = dateInp.value;
-        if (sel && !(days[sel] && days[sel].wolne)) {
-          // przy nowym wyborze (np. dłuższy pakiet) ten dzień jest już pełny
-          dateInp.value = "";
-          slotSel.value = "";
-          hoursBox.hidden = true;
-          render();
-          setErr(pick, "Przy tym wyborze ten dzień jest już pełny – wybierz inny.");
-        }
-      };
-
-      const chooseDay = async (d, time) => {
-        dateInp.value = d;
-        month = d.slice(0, 7);
-        setErr(pick, "");
-        render();
-        await fillSlots();
-        if (time && known && known.includes(time)) { slotSel.value = time; renderHours(lastList); }
-        validateDate(dateInp);
-      };
-
-      renderHours = (list) => {
-        hoursBox.hidden = !dateInp.value;
-        $(".slotpick__h", pick).textContent = dateInp.value ? `Godzina – ${plDate(dateInp.value)}` : "";
-        if (list === null) { chips.innerHTML = '<p class="slotpick__empty">Sprawdzam wolne godziny…</p>'; return; }
-        if (!list.length) { chips.innerHTML = '<p class="slotpick__empty">Brak wolnych godzin tego dnia – wybierz inny dzień.</p>'; return; }
-        chips.innerHTML = list.map((t) => `<label class="chip"><input type="radio" name="_godzina" value="${t.godzina}"${slotSel.value === t.godzina ? " checked" : ""}><span>${t.godzina}–${t.do}</span></label>`).join("");
-        $$("input", chips).forEach((i) => i.addEventListener("change", () => { slotSel.value = i.value; setErr(pick, ""); }));
-      };
-
-      grid.addEventListener("click", (e) => { const b = e.target.closest("[data-d]"); if (b && !b.disabled) chooseDay(b.dataset.d); });
-      $$("[data-m]", pick).forEach((b) => b.addEventListener("click", () => {
-        const [y, m] = month.split("-").map(Number);
-        const d = new Date(Date.UTC(y, m - 1 + Number(b.dataset.m), 1));
-        month = d.toISOString().slice(0, 7);
-        render();
-      }));
-      soon.addEventListener("click", () => { const f = firstFree(); if (f) chooseDay(f, days[f].pierwsza); });
-      // zmiana opcji zmienia czas wizyty, więc i to, które dni mają wolne miejsca
-      $$('input[type="radio"], input[type="checkbox"]:not([name="zgoda"])', form).forEach((i) => i.addEventListener("change", () => { if (days) loadDays(); }));
-      form._pickerReset = () => { days = null; month = null; hoursBox.hidden = true; loadDays(); };
-      // dni pobieramy dopiero, gdy formularz jest widoczny (zakładki na stronie rezerwacji)
-      const io = new IntersectionObserver((entries) => { if (entries.some((x) => x.isIntersecting)) { io.disconnect(); loadDays(); } }, { rootMargin: "800px 0px" });
-      io.observe(pick);
-    }
 
     const validateDate = (inp) => {
       const wrap = inp.closest(".fld");
@@ -416,10 +288,7 @@
       if (v > addDays(now.ymd, AHEAD)) { setErr(wrap, MSG.far); return false; }
       const optional = inp.hasAttribute("data-optional");
       if (optional && !HOURS[dowOf(v)]) { setErr(wrap, MSG.sunday); return false; }
-      if (!optional && inp === dateInp && known && !known.length) {
-        setErr(wrap, closedWhy ? `Tego dnia jesteśmy zamknięci (${closedWhy}) – wybierz inny dzień.` : dowOf(v) === 0 ? MSG.sunday : MSG_NO_SLOTS);
-        return false;
-      }
+      if (!optional && inp === dateInp && known && !known.length) { setErr(wrap, dowOf(v) === 0 ? MSG.sunday : MSG_NO_SLOTS); return false; }
       setErr(wrap, "");
       return true;
     };
@@ -530,7 +399,7 @@
         }
         btn.disabled = false;
         btn.innerHTML = label;
-        showDone(form, { ...data, godzinaTekst: slotSel && slotSel.value ? slotSel.selectedOptions[0].textContent : "" });
+        showDone(form, data);
       } catch (err) {
         const ph = form.dataset.phone;
         if (msgBox) {
@@ -546,7 +415,7 @@
   function showDone(form, d) {
     const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
     const rows = [];
-    if (d.data) rows.push(["Termin", `${plDate(d.data)}${d.godzina ? ", " + (d.godzinaTekst || d.godzina) : ""}${d.pora && d.pora !== "Obojętnie" ? ", " + d.pora.toLowerCase() : ""}`]);
+    if (d.data) rows.push(["Termin", `${plDate(d.data)}${d.godzina ? ", " + d.godzina : ""}${d.pora && d.pora !== "Obojętnie" ? ", " + d.pora.toLowerCase() : ""}`]);
     rows.push(["Telefon", d.telefon]);
     if (d.email) rows.push(["E-mail", d.email]);
     const box = document.createElement("div");
@@ -565,7 +434,6 @@
     $("button", box).addEventListener("click", () => {
       form.reset();
       slotCache.clear();
-      if (form._pickerReset) form._pickerReset();
       $$("[data-slots]", form).forEach((s) => { s.replaceChildren(new Option("Najpierw wybierz dzień", "")); s.disabled = true; });
       const ts = $("[data-ts]", form); if (ts) ts.value = String(Date.now());
       box.remove();
@@ -576,7 +444,7 @@
   /* ---------- Rezerwacja: potwierdzenie, płatność nieudana, płatność testowa ---------- */
   const qs = new URLSearchParams(location.search);
   const zl = (gr) => (gr / 100).toLocaleString("pl-PL", { style: "currency", currency: "PLN" });
-  const termText = (r) => (r.data ? `${plDate(r.data)}${r.godzina ? ", " + r.godzina + (r.godzinaDo ? "–" + r.godzinaDo : "") : ""}` : "");
+  const termText = (r) => (r.data ? `${plDate(r.data)}${r.godzina ? ", " + r.godzina : ""}` : "");
   const fillDl = (dl, rows) => {
     dl.replaceChildren();
     rows.filter((r) => r[1]).forEach(([k, v]) => {

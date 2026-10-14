@@ -365,34 +365,6 @@ table{border-collapse:collapse;width:100%}
 .btn .spin{width:18px;height:18px;border-radius:50%;border:2.5px solid rgba(255,255,255,.4);border-top-color:#fff;animation:spin .8s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
 
-/* Wybór terminu: kalendarz wolnych dni + godziny (zastępuje pole daty i listę godzin, gdy działa JS) */
-.slotpick{gap:12px}
-.slotpick.is-loading .cal{opacity:.55}
-.slotpick__soon{justify-self:start;display:inline-flex;align-items:center;gap:8px;min-height:44px;padding:9px 16px;border-radius:99px;border:2px solid var(--blue);
-  background:var(--sky);color:var(--navy);font-weight:700;font-size:.92rem;cursor:pointer;text-align:left;transition:background-color .15s,border-color .15s}
-.slotpick__soon::before{content:"";width:9px;height:9px;flex:none;border-radius:50%;background:var(--ok)}
-.slotpick__soon:hover{background:#fff}
-.cal{max-width:460px;padding:12px;border:2px solid var(--line);border-radius:var(--r);background:#fff;transition:opacity .15s}
-.cal__wait{grid-column:1/-1;padding:28px 0;text-align:center}
-.cal__nav{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px}
-.cal__nav b{color:var(--navy);font-weight:800;font-stretch:110%}
-.cal__nav b::first-letter{text-transform:uppercase}
-.cal__nav button{width:40px;height:40px;border-radius:var(--r-sm);border:1px solid var(--line);background:#fff;color:var(--navy);font-size:1.25rem;line-height:1;cursor:pointer}
-.cal__nav button:hover:not(:disabled){border-color:var(--navy)}
-.cal__nav button:disabled{opacity:.3;cursor:default}
-.cal__grid{display:grid;grid-template-columns:repeat(7,1fr);gap:4px}
-.cal__dow{padding:2px 0 4px;text-align:center;font-size:.72rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--muted)}
-.cal__day{position:relative;min-height:40px;border-radius:var(--r-sm);border:2px solid transparent;background:var(--sky);color:var(--navy);
-  font-weight:700;font-size:.95rem;cursor:pointer;transition:background-color .12s,border-color .12s,color .12s}
-.cal__day:hover:not(:disabled){border-color:var(--blue)}
-.cal__day:disabled{background:none;color:#aeb8c9;font-weight:500;cursor:default}
-.cal__day.is-today{box-shadow:inset 0 0 0 1px var(--blue)}
-.cal__day.is-few::after{content:"";position:absolute;top:5px;right:5px;width:6px;height:6px;border-radius:50%;background:var(--red)}
-.cal__day[aria-pressed="true"]{background:var(--navy);border-color:var(--navy);color:#fff}
-.slotpick__hours{display:grid;gap:9px}
-.slotpick__h{font-weight:700;font-size:.97rem;color:var(--navy)}
-.slotpick__empty{color:var(--muted);font-size:.93rem}
-
 .done{display:grid;gap:14px;justify-items:start;padding:8px 0}
 .done__ic{width:64px;height:64px;border-radius:50%;background:#e7f7ef;color:var(--ok);display:grid;place-items:center}
 .done__ic .ic{width:34px;height:34px}

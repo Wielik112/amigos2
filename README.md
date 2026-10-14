@@ -17,8 +17,8 @@ Wszystko klika się w Vercelu – niczego nie trzeba instalować lokalnie.
 
 1. Vercel → projekt → **Storage → Create Database → Neon** (region Frankfurt, plan Free) → podłącz do projektu we wszystkich środowiskach. Vercel sam doda `DATABASE_URL`.
 2. **Settings → Environment Variables**: `PAYMENTS_MODE=mock`, `ADMIN_LOGIN=admin`, `ADMIN_PASSWORD=<mocne hasło>`, `CRON_SECRET=<losowy ciąg>`, a tylko dla Production `PUBLIC_BASE_URL=https://twoja-domena.pl` (pełna lista: `.env.example`).
-3. **Redeploy**. Przy każdym wdrożeniu Vercel uruchamia `npm run vercel-build` (`scripts/vercel-build.js`): tworzy/aktualizuje tabele, 5 usług (zaliczka 50 zł), stanowiska, grafik tygodniowy i czasy usług (wartości z `api/_lib/defaults.js`) oraz konto admina z `ADMIN_PASSWORD`. Uzupełnia tylko to, czego brakuje – ustawień zmienionych w panelu nie nadpisuje. Zmiana `ADMIN_PASSWORD` + Redeploy = nowe hasło admina.
-4. Panel: `https://twoja-domena.pl/admin`. Terminy liczą się same z grafiku – nic nie trzeba generować ani dogenerowywać.
+3. **Redeploy**. Przy każdym wdrożeniu Vercel uruchamia `npm run vercel-build` (`scripts/vercel-build.js`): tworzy/aktualizuje tabele, 5 usług (zaliczka 50 zł), sloty na 2 tygodnie dla usług, które jeszcze nie mają slotów, i konto admina z `ADMIN_PASSWORD`. Ustawień zmienionych w panelu nie nadpisuje, usuniętych slotów nie odtwarza. Zmiana `ADMIN_PASSWORD` + Redeploy = nowe hasło admina.
+4. Panel: `https://twoja-domena.pl/admin`. Kolejne terminy dodaje się w panelu (Grafik → Generator slotów).
 
 ### Żeby zgłoszenia przychodziły na maila### Żeby zgłoszenia przychodziły na maila
 
@@ -41,7 +41,7 @@ Wymaga Node 20+ i Postgresa (lokalnie albo darmowy Neon).
 ```bash
 cp .env.example .env        # uzupełnij DATABASE_URL (i ADMIN_PASSWORD)
 npm install
-npm run seed                # tabele + usługi + stanowiska + grafik + konto admina (można powtarzać; na Vercelu dzieje się to samo przy wdrożeniu)
+npm run seed                # tabele + usługi + sloty + konto admina (można powtarzać; na Vercelu dzieje się to samo przy wdrożeniu)
 npm run dev                 # http://localhost:3000, panel: http://localhost:3000/admin
 npm test                    # testy na osobnej bazie: TEST_DATABASE_URL (domyślnie postgres://amigos:amigos@localhost:5432/amigos_test – UWAGA: test czyści tę bazę)
 ```
@@ -50,38 +50,18 @@ W trybie `PAYMENTS_MODE=mock` cały przepływ działa bez kluczy: formularz → 
 
 ## Jak działają rezerwacje
 
-**Wolne godziny są liczone na bieżąco** (bez generowania slotów) z czterech rzeczy, które ustawia się w panelu:
-
-1. **Grafik tygodniowy** usługi (Grafik → Godziny pracy, z przerwą) + **dni wolne / zmienione godziny** + **polskie święta** (automatycznie, łącznie z Wielkanocą, Bożym Ciałem i Wigilią).
-2. **Czas wizyty zależny od wyboru klienta** (Usługi → Czas trwania): czas bazowy + minuty za wybrane opcje formularza, np. „Pakiet komplet” 180 min, „SUV” +15 min. Formularz pokazuje tylko te godziny, w których cała wizyta się mieści (np. nie wejdzie w przerwę ani za zamknięcie), i od razu godzinę zakończenia („10:00–13:00”).
-3. **Stanowiska** (Usługi → Stanowiska): ile wizyt naraz. Stanowisko może obsługiwać kilka usług – wtedy wizyta w jednej blokuje je także dla drugiej (np. biuro: rejestracja + ubezpieczenia).
-4. **Zasady**: zapas po każdej wizycie, co ile minut pokazywać godziny startu, minimalne wyprzedzenie, na ile dni do przodu.
-
-**W formularzu klient wybiera termin z kalendarza:** aktywne są tylko dni z wolnymi godzinami (czerwona kropka = ostatnie wolne miejsca), godziny są przyciskami z godziną zakończenia, a przycisk „Najbliższy wolny termin” wybiera pierwszy wolny dzień i godzinę jednym kliknięciem. Zmiana opcji (np. dłuższy pakiet) od razu przelicza dni i godziny. Kalendarz pobiera dane jednym zapytaniem (`GET /api/terminy?usluga=…&dni=1`); gdyby API nie odpowiadało, formularz wraca do zwykłego pola daty i listy godzin.
-
-Ochrona przed konfliktami:
-- **Dwie osoby na ten sam termin:** zapis w transakcji blokuje stanowiska usługi (`SELECT … FOR UPDATE`), a w bazie działa constraint `bookings_no_overlap` (`EXCLUDE USING gist`) – dwie aktywne wizyty na jednym stanowisku nie mogą na siebie nachodzić, łącznie z zapasem. Przegrany dostaje „Ten termin właśnie został zajęty”.
-- **Rezerwacje z telefonu / na miejscu:** Kalendarz → kliknij wolne miejsce albo „+ Dodaj rezerwację”. Termin od razu znika z rezerwacji online. Opcja „poza grafikiem” pozwala zapisać kogoś po godzinach – nadal bez nakładania się na inne wizyty.
-- **Blokady czasu** (Kalendarz → „Zablokuj czas”): na całą usługę albo jedno stanowisko (awaria, szkolenie).
-- **Przełożenie wizyty** (klient dzwoni): szczegóły rezerwacji → „Przełóż”. Panel pokazuje tylko wolne godziny (przekładana wizyta nie blokuje sama siebie), zaliczka i dane zostają, stary termin od razu wraca do puli, a w notatce zapisuje się, skąd i kto przełożył. Klientowi nową godzinę przekazuje się telefonicznie – system nie wysyła SMS-ów ani e-maili.
-- **Duplikaty:** ten sam numer telefonu nie zarezerwuje drugi raz tej samej usługi tego samego dnia.
-- Zmiana grafiku, dodanie dnia wolnego albo blokady nie przesuwa już zapisanych wizyt – panel ostrzega, ile wizyt wypada w tym czasie.
-
-Pozostałe zasady:
+- Formularz pobiera wolne godziny z `GET /api/terminy?usluga=…&dzien=RRRR-MM-DD` (tylko sloty niezablokowane, w przyszłości, z wolnym miejscem).
+- `POST /api/zapis` w transakcji blokuje wiersz slotu (`SELECT … FOR UPDATE`) i tworzy rezerwację. Dodatkowo częściowy indeks unikalny w bazie nie pozwala, żeby dwie aktywne rezerwacje zajęły to samo miejsce – przy równoczesnych żądaniach jedno przechodzi, drugie dostaje „Ten termin właśnie został zajęty”.
 - Usługa z zaliczką → status `pending_payment` i hold na 15 min (w trybie Stripe 30 min – minimum Stripe), potem przekierowanie do płatności. Bez zaliczki → od razu `confirmed`.
 - Rezerwację potwierdza wyłącznie zdarzenie płatności (webhook Stripe albo przycisk na stronie symulacji – obie drogi przechodzą przez tę samą funkcję `applyPaymentEvent`). Powrót klienta na stronę potwierdzenia niczego nie zmienia – strona tylko odpytuje status.
-- Wygasłe holdy nie blokują terminu (dostępność liczy tylko aktywne holdy, a zapis sprząta wygasłe holdy na stanowiskach); dodatkowo cron (`/api/cron`) porządkuje statusy raz dziennie.
+- Wygasłe holdy nie blokują terminu (dostępność liczy tylko aktywne holdy); dodatkowo cron (`/api/cron`) porządkuje statusy. Na darmowym planie Vercel cron działa raz dziennie – to wystarcza, bo poprawność nie zależy od crona.
 - Daty w bazie są w UTC, wszystko na stronie i w panelu w czasie polskim (`Europe/Warsaw`, ze zmianą czasu).
 - Pola specyficzne dla usług są w `bookings.details` (JSON) i są walidowane według definicji formularzy z `src/build.py` (generowane do `api/_uslugi.json`).
-- Ubezpieczenia to prośba o kontakt („kiedy oddzwonić”) – bez terminu i domyślnie bez zaliczki.
+- Ubezpieczenia to prośba o kontakt („kiedy oddzwonić”) – bez slotu i domyślnie bez zaliczki.
 
-### Domyślne liczby (do podmiany na dane od firmy)
+**Panel `/admin`:** rezerwacje (zakładki per usługa, filtry, szczegóły, anulowanie z powodem), grafik (generator slotów, kalendarz tygodnia, blokowanie slotów i dni; slotu z rezerwacją nie da się usunąć), ustawienia usług (zaliczka, długość slotu, aktywność), dzwonek z powiadomieniami (odświeżanie co 20 s). Hasło admina jest hashowane (scrypt), sesja w ciasteczku `httpOnly`, logowanie ma limit prób.
 
-Wszystkie przykładowe wartości – stanowiska, czasy usług, zapasy, przerwa, wyprzedzenie – są w **`api/_lib/defaults.js`**.
-Trafiają do bazy przy pierwszym wdrożeniu; potem zmienia się je w panelu (Grafik, Usługi). Gdy przyjdą prawdziwe dane, najprościej
-wpisać je w panelu albo poprawić `defaults.js` i w panelu kliknąć „Przywróć domyślne czasy” przy danej usłudze.
-
-**Panel `/admin`:** rezerwacje (zakładki per usługa, wyszukiwanie po telefonie / nr rej. / imieniu, szczegóły, anulowanie z powodem), kalendarz dnia (kolumny = stanowiska, dodawanie rezerwacji kliknięciem, blokady), grafik (godziny pracy, zasady, dni wolne, święta), usługi i stanowiska (zaliczka, czas trwania, przypisanie stanowisk), dzwonek z powiadomieniami (odświeżanie co 20 s). Hasło admina jest hashowane (scrypt), sesja w ciasteczku `httpOnly`, logowanie ma limit prób.
+Nowe hasło admina: ustaw `ADMIN_PASSWORD` i uruchom `npm run seed` ponownie.
 
 ## Jak przełączyć na prawdziwe płatności
 
@@ -134,8 +114,7 @@ api/platnosc.js           status rezerwacji, strona płatności testowej
 api/stripe-webhook.js     webhook Stripe (podpis, idempotencja)
 api/admin.js              API panelu (/api/admin/*)
 api/cron.js               sprzątanie wygasłych holdów
-api/_lib/                 logika: dostępność (availability.js), rezerwacje, płatności (mock/Stripe), auth, walidacja, SQL migracji
-api/_lib/defaults.js      domyślne stanowiska, czasy usług i zasady grafiku (przykładowe – do podmiany)
+api/_lib/                 logika: rezerwacje, płatności (mock/Stripe), auth, walidacja, SQL migracji
 admin/                    panel rezerwacji (/admin) + assets/css/admin.css, assets/js/admin.js
 potwierdzenie.html, platnosc-nieudana.html, platnosc/mock.html   strony po płatności
 scripts/                  serwer lokalny, migracje, seed, krok build na Vercelu
@@ -152,7 +131,7 @@ src/build.py              generator stron (nie trafia na serwer – .vercelignor
 ## Do zrobienia / do potwierdzenia z firmą
 
 - [x] Prawdziwy system rezerwacji z blokowaniem zajętych godzin (zob. „Jak działają rezerwacje”).
-- [ ] Kwoty zaliczek (teraz prototypowo 50 zł), liczba stanowisk, czasy usług, przerwy – teraz przykładowe (`api/_lib/defaults.js`), do potwierdzenia z firmą.
+- [ ] Kwoty zaliczek (teraz prototypowo 50 zł) i długości slotów per usługa – do ustawienia w panelu.
 - [ ] Zwroty zaliczek automatycznie przez Stripe (interfejs `refund()` jest gotowy, teraz zwrot ręczny).
 - [ ] Polityka prywatności: pełna nazwa firmy, NIP, REGON (żółte pole na stronie).
 - [ ] Godziny otwarcia myjni, biura i geometrii – teraz wszędzie są godziny stacji kontroli z Google.
