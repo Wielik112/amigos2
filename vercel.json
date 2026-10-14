@@ -28,6 +28,10 @@
       "headers": [{ "key": "Cache-Control", "value": "no-store" }, { "key": "X-Robots-Tag", "value": "noindex" }]
     },
     {
+      "source": "/zaliczka",
+      "headers": [{ "key": "Cache-Control", "value": "no-store" }, { "key": "X-Robots-Tag", "value": "noindex" }]
+    },
+    {
       "source": "/potwierdzenie",
       "headers": [{ "key": "Cache-Control", "value": "no-store" }, { "key": "X-Robots-Tag", "value": "noindex" }]
     },

@@ -157,3 +157,30 @@ test("PAYMENTS_MODE=real bez kluczy: aplikacja nie startuje i mówi dlaczego", a
   assert.equal(out.status, 1);
   assert.match(out.stderr, /PAYMENTS_MODE=real wymaga ustawienia: STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET/);
 });
+
+test("strona zaliczki: najpierw /zaliczka z kwotą i adresem płatności, rezygnacja od razu zwalnia termin", async () => {
+  const slot = await h.makeSlot("myjnia-reczna", { time: "22:30" });
+  const r = await h.post(env.base, "/api/zapis", h.bookingBody("myjnia-reczna", slot));
+  assert.equal(r.json.nextUrl, `/zaliczka?id=${r.json.bookingId}`, "formularz prowadzi na stronę zaliczki, nie prosto do płatności");
+  assert.equal((await fetch(env.base + r.json.nextUrl)).status, 200);
+  const st = await h.get(env.base, `/api/platnosc/status?id=${r.json.bookingId}`);
+  assert.equal(st.json.rezerwacja.platnosc.kwota, 5000);
+  assert.equal(st.json.rezerwacja.platnosc.url, r.json.redirectUrl, "przycisk „Przejdź do płatności” prowadzi do płatności");
+
+  let free = await h.get(env.base, `/api/terminy?usluga=myjnia-reczna&dzien=${slot.date}`);
+  assert.ok(!free.json.terminy.some((t) => t.godzina === slot.time), "termin wstrzymany w czasie czytania strony");
+  const c = await h.post(env.base, "/api/platnosc/anuluj", { id: r.json.bookingId });
+  assert.equal(c.status, 200);
+  free = await h.get(env.base, `/api/terminy?usluga=myjnia-reczna&dzien=${slot.date}`);
+  assert.ok(free.json.terminy.some((t) => t.godzina === slot.time), "po rezygnacji termin wrócił do puli");
+  const after = await h.get(env.base, `/api/platnosc/status?id=${r.json.bookingId}`);
+  assert.equal(after.json.rezerwacja.status, "expired");
+  assert.equal(after.json.rezerwacja.platnosc.url, null, "po rezygnacji nie da się już zapłacić");
+
+  // formularz bez JS (zwykły POST) też trafia na stronę zaliczki
+  const form = await fetch(env.base + "/api/zapis", { method: "POST", redirect: "manual",
+    headers: { "Content-Type": "application/x-www-form-urlencoded", "X-Forwarded-For": "10.1.2.3" },
+    body: new URLSearchParams({ ...h.bookingBody("myjnia-reczna", slot), zgoda: "tak" }) });
+  assert.equal(form.status, 303);
+  assert.match(form.headers.get("location"), /^\/zaliczka\?id=/);
+});

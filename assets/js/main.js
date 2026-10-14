@@ -392,9 +392,9 @@
           throw new Error(json.error || "Nie udało się wysłać zgłoszenia.");
         }
         if (json.redirectUrl) {
-          // zaliczka: przechodzimy do płatności (termin jest wstrzymany na czas płatności)
-          btn.innerHTML = '<span class="spin" aria-hidden="true"></span><span>Przechodzę do płatności…</span>';
-          location.assign(json.redirectUrl);
+          // zaliczka: najpierw strona z kwotą i czasem na wpłatę (termin jest już wstrzymany), płatność dopiero stamtąd
+          btn.innerHTML = '<span class="spin" aria-hidden="true"></span><span>Chwileczkę…</span>';
+          location.assign(json.nextUrl || json.redirectUrl);
           return;
         }
         btn.disabled = false;
@@ -501,12 +501,67 @@
     tick();
   }
 
+  const dp = $("[data-deposit]");
+  if (dp) {
+    const id = qs.get("id");
+    const dl = $("[data-dp-details]"), timer = $("[data-dp-timer]"), msg = $("[data-dp-msg]");
+    const pay = $("[data-dp-pay]"), cancel = $("[data-dp-cancel]");
+    const fail = (t) => { msg.textContent = t; msg.hidden = false; };
+    let until = 0, iv = null;
+    const countdown = () => {
+      const left = Math.max(0, Math.round((until - Date.now()) / 1000));
+      timer.textContent = left
+        ? `Termin czeka na Twoją wpłatę jeszcze ${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")} min.`
+        : "Czas na wpłatę minął – termin wrócił do puli.";
+      if (!left) {
+        clearInterval(iv);
+        pay.setAttribute("aria-disabled", "true");
+        pay.removeAttribute("href");
+        cancel.disabled = true;
+        setTimeout(() => location.replace(`/platnosc-nieudana?id=${encodeURIComponent(id)}&powod=czas`), 1500);
+      }
+    };
+    getJson(`/api/platnosc/status?id=${encodeURIComponent(id || "")}`).then(({ ok, j }) => {
+      const r = j.rezerwacja;
+      if (!ok || !r) { timer.textContent = ""; fail("Nie znaleziono rezerwacji. Spróbuj zarezerwować ponownie albo zadzwoń do nas."); return; }
+      if (r.status === "confirmed") { location.replace(`/potwierdzenie?id=${encodeURIComponent(id)}`); return; }
+      if (r.status !== "pending_payment" || !r.platnosc || !r.platnosc.url) {
+        location.replace(`/platnosc-nieudana?id=${encodeURIComponent(id)}&powod=${r.status === "cancelled" ? "anulowano" : "czas"}`);
+        return;
+      }
+      fillDl(dl, [["Usługa", r.usluga], ["Termin", termText(r)], ["Zaliczka", zl(r.platnosc.kwota)]]);
+      $("[data-dp-lead]").textContent = `${r.imie ? r.imie + ", t" : "T"}ermin jest już wstrzymany dla Ciebie. Żeby go potwierdzić, wpłać zaliczkę ${zl(r.platnosc.kwota)} online.`;
+      pay.textContent = `Przejdź do płatności · ${zl(r.platnosc.kwota)}`;
+      pay.href = r.platnosc.url;
+      pay.removeAttribute("aria-disabled");
+      cancel.disabled = false;
+      until = Date.parse(r.holdDo);
+      countdown();
+      iv = setInterval(countdown, 1000);
+    });
+    pay.addEventListener("click", (e) => { if (pay.getAttribute("aria-disabled") === "true") e.preventDefault(); });
+    cancel.addEventListener("click", async () => {
+      if (!confirm("Zrezygnować z tej rezerwacji? Termin wróci do puli i będzie można go zarezerwować ponownie.")) return;
+      cancel.disabled = true;
+      pay.setAttribute("aria-disabled", "true");
+      const { ok } = await getJson("/api/platnosc/anuluj", { method: "POST", body: JSON.stringify({ id }) });
+      if (ok) { location.replace(`/platnosc-nieudana?id=${encodeURIComponent(id)}&powod=rezygnacja`); return; }
+      cancel.disabled = false;
+      pay.removeAttribute("aria-disabled");
+      fail("Nie udało się zrezygnować. Spróbuj ponownie albo zadzwoń do nas.");
+    });
+  }
+
   const bf = $("[data-booking-failed]");
   if (bf) {
     const id = qs.get("id");
     if (qs.get("powod") === "anulowano") {
       $("[data-bf-title]").textContent = "Płatność anulowana";
       $("[data-bf-lead]").textContent = "Rezerwacja nie została opłacona, więc termin wrócił do puli.";
+    }
+    if (qs.get("powod") === "rezygnacja") {
+      $("[data-bf-title]").textContent = "Rezygnacja przyjęta";
+      $("[data-bf-lead]").textContent = "Nie pobraliśmy żadnej opłaty, a termin wrócił do puli. Możesz w każdej chwili wybrać inny.";
     }
     if (id) {
       // rezygnacja na stronie płatności: zamykamy płatność, żeby termin od razu wrócił do puli

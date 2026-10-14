@@ -4,7 +4,8 @@
  * Co robi:
  *  1. Sprawdza dane (whitelist pól, schemat pól usługi, telefon, zgoda, antyspam, limit na IP).
  *  2. W transakcji blokuje termin i tworzy rezerwację (api/_lib/bookings.js):
- *     - usługa z zaliczką -> status pending_payment, hold 15 min, odpowiedź z redirectUrl do płatności,
+ *     - usługa z zaliczką -> status pending_payment, hold 15 min, klient trafia na stronę /zaliczka
+ *       (kwota, termin, czas na wpłatę) i dopiero stamtąd przechodzi do płatności,
  *     - bez zaliczki      -> od razu confirmed (+ powiadomienie w panelu).
  *  3. Opcjonalnie (jak dotąd) wysyła e-mail przez Resend i JSON pod WEBHOOK_URL – błąd wysyłki nie psuje rezerwacji.
  *
@@ -103,5 +104,6 @@ module.exports = handler(async (req, res) => {
     .then((r) => r.forEach((x) => x.status === "rejected" && console.error("[zapis] błąd wysyłki", x.reason.message)));
 
   const done = `/potwierdzenie?id=${booking.id}`;
-  return reply(200, { ok: true, status, bookingId: booking.id, redirectUrl: redirectUrl || null, confirmUrl: done }, redirectUrl || done);
+  const next = redirectUrl ? `/zaliczka?id=${booking.id}` : done;
+  return reply(200, { ok: true, status, bookingId: booking.id, redirectUrl: redirectUrl || null, nextUrl: next, confirmUrl: done }, next);
 });
