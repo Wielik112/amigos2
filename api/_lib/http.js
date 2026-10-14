@@ -7,17 +7,24 @@ class HttpError extends Error {
 
 const MAX_BODY = 64 * 1024;
 
-/** Surowe body (Buffer) – potrzebne do weryfikacji podpisu webhooka Stripe. */
-async function readRaw(req) {
-  if (Buffer.isBuffer(req.rawBody)) return req.rawBody;
-  const chunks = [];
-  let size = 0;
-  for await (const c of req) {
-    size += c.length;
-    if (size > MAX_BODY) throw new HttpError(413, "Za duże żądanie.");
-    chunks.push(c);
-  }
-  return Buffer.concat(chunks);
+/**
+ * Surowe body (Buffer) – potrzebne do weryfikacji podpisu webhooka Stripe.
+ * Uwaga: Vercel (@vercel/node) czyta body przed handlerem i odtwarza je wyłącznie przez zdarzenia
+ * „data”/„end” (restoreBody) – `for await (… of req)` dostaje wtedy pusty strumień. Dlatego słuchamy zdarzeń.
+ */
+function readRaw(req) {
+  if (Buffer.isBuffer(req.rawBody)) return Promise.resolve(req.rawBody);
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let size = 0;
+    req.on("data", (c) => {
+      size += c.length;
+      if (size > MAX_BODY) { reject(new HttpError(413, "Za duże żądanie.")); return; }
+      chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(c));
+    });
+    req.on("end", () => resolve(Buffer.concat(chunks)));
+    req.on("error", reject);
+  });
 }
 
 /** Body jako obiekt: JSON albo formularz (application/x-www-form-urlencoded). */

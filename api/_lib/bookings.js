@@ -243,6 +243,34 @@ async function cancelBooking(id, by, reason) {
   return { refund: out.refund };
 }
 
+/**
+ * Zapasowa synchronizacja płatności, gdy webhook nie dotarł (np. zła konfiguracja endpointu w Stripe):
+ * dla wstrzymanej rezerwacji pytamy dostawcę o stan płatności (Stripe API, klucz tajny) i przepuszczamy wynik
+ * przez ten sam applyPaymentEvent(). Najwyżej raz na kilka sekund na płatność.
+ */
+const lastSync = new Map();
+async function syncPayment(bookingId) {
+  const { rows: [p] } = await query(
+    `SELECT p.* FROM bookings b JOIN payments p ON p.id = b.payment_id
+      WHERE b.id = $1 AND b.status = 'pending_payment' AND p.status = 'pending' AND p.provider_ref IS NOT NULL`, [bookingId]);
+  if (!p) return null;
+  const provider = getProviderByName(p.provider);
+  if (!provider || !provider.fetchEvent) return null;
+  const now = Date.now();
+  if (now - (lastSync.get(p.id) || 0) < 4000) return null;
+  lastSync.set(p.id, now);
+  if (lastSync.size > 2000) lastSync.clear();
+  try {
+    const ev = await provider.fetchEvent(p);
+    if (!ev) return null;
+    console.warn("[płatność] potwierdzenie z API dostawcy (webhook nie dotarł?)", p.provider, ev.type, bookingId);
+    return await applyPaymentEvent(ev);
+  } catch (e) {
+    console.error("[płatność] nie udało się sprawdzić płatności u dostawcy", e.message);
+    return null;
+  }
+}
+
 /** Status rezerwacji dla strony potwierdzenia (id rezerwacji = losowy UUID, pełni rolę tokenu). */
 async function publicStatus(id) {
   const { rows: [r] } = await query(
@@ -270,4 +298,4 @@ async function paymentInfo(paymentId) {
   return r || null;
 }
 
-module.exports = { createBooking, applyPaymentEvent, cancelBooking, listAvailable, expireHolds, publicStatus, paymentInfo, SLOT_TAKEN };
+module.exports = { syncPayment, createBooking, applyPaymentEvent, cancelBooking, listAvailable, expireHolds, publicStatus, paymentInfo, SLOT_TAKEN };
