@@ -6,7 +6,7 @@ const { query, tx } = require("./_lib/db");
 const { TZ } = require("./_lib/config");
 const { login, logout, requireAdmin } = require("./_lib/auth");
 const { isLimited } = require("./_lib/ratelimit");
-const { cancelBooking, expireHolds } = require("./_lib/bookings");
+const { cancelBooking, expireHolds, syncPayment } = require("./_lib/bookings");
 const { generateSlots } = require("./_lib/slots");
 const { isRealDate, clean } = require("./_lib/validate");
 const { getConfig } = require("./_lib/config");
@@ -203,7 +203,7 @@ module.exports = handler(async (req, res) => {
     if (seg.length === 1 && m === "GET") { await expireHolds(null).catch(() => {}); return ok({ rezerwacje: await listBookings(url.searchParams) }); }
     const id = seg[1];
     if (!UUID_RE.test(id || "")) throw new HttpError(404, "Nie ma takiej rezerwacji.");
-    if (seg.length === 2 && m === "GET") return ok({ rezerwacja: await getBooking(id) });
+    if (seg.length === 2 && m === "GET") { await syncPayment(id); return ok({ rezerwacja: await getBooking(id) }); }
     if (seg[2] === "anuluj" && m === "POST") {
       const body = await readBody(req);
       const { refund } = await cancelBooking(id, admin.login, clean(body.powod, 300) || null);

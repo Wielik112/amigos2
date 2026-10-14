@@ -66,9 +66,24 @@ function create(cfg) {
       try {
         event = stripe.webhooks.constructEvent(rawBody, sig, cfg.stripeWebhookSecret);
       } catch (e) {
+        // najczęściej: STRIPE_WEBHOOK_SECRET z innego endpointu / innego sandboxa niż ten, który wysyła zdarzenia
+        console.error("[stripe-webhook] odrzucony podpis:", e.message, `(body: ${rawBody ? rawBody.length : 0} B)`);
         throw new HttpError(400, "Niepoprawny podpis webhooka.");
       }
       return eventFor(event);
+    },
+
+    /**
+     * Zapasowe sprawdzenie u Stripe (gdy webhook nie dotarł): stan sesji pobrany z API kluczem tajnym.
+     * Zwraca PaymentEvent albo null, gdy płatność wciąż trwa.
+     */
+    async fetchEvent(payment) {
+      if (!payment.provider_ref) return null;
+      const s = await stripe.checkout.sessions.retrieve(payment.provider_ref);
+      const base = { provider: "stripe", eventId: null, paymentId: payment.id, providerRef: s.id };
+      if (s.payment_status === "paid" || s.payment_status === "no_payment_required") return { ...base, type: "succeeded" };
+      if (s.status === "expired") return { ...base, type: "expired" };
+      return null;
     },
 
     async refund() {

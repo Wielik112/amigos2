@@ -7,7 +7,7 @@
  *  POST anuluj { id }           klient zrezygnował (strona /zaliczka albo powrót ze Stripe): płatność wygasa, termin wraca do puli,
  *                               a sesja Stripe jest zamykana
  */
-const { applyPaymentEvent, publicStatus, paymentInfo } = require("./_lib/bookings");
+const { applyPaymentEvent, publicStatus, paymentInfo, syncPayment } = require("./_lib/bookings");
 const { getProviderByName } = require("./_lib/payments");
 const { getConfig } = require("./_lib/config");
 const { query } = require("./_lib/db");
@@ -21,7 +21,9 @@ module.exports = handler(async (req, res) => {
   const op = url.searchParams.get("op") || url.pathname.split("/").pop();
 
   if (op === "status" && req.method === "GET") {
-    const r = await publicStatus(needId(url.searchParams.get("id")));
+    const id = needId(url.searchParams.get("id"));
+    await syncPayment(id);   // zapas, gdyby webhook nie dotarł
+    const r = await publicStatus(id);
     if (!r) throw new HttpError(404, "Nie znaleziono rezerwacji.");
     return sendJson(res, 200, { ok: true, rezerwacja: {
       status: r.status, usluga: r.service_name, data: r.date || (r.details && r.details.data) || null, godzina: r.time,

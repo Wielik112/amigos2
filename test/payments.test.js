@@ -184,3 +184,47 @@ test("strona zaliczki: najpierw /zaliczka z kwotą i adresem płatności, rezygn
   assert.equal(form.status, 303);
   assert.match(form.headers.get("location"), /^\/zaliczka\?id=/);
 });
+
+test("webhook nie dotarł: strona potwierdzenia sama sprawdza płatność w Stripe (API, klucz tajny)", async () => {
+  process.env.STRIPE_SECRET_KEY = "sk_test_dummy";
+  process.env.STRIPE_WEBHOOK_SECRET = "whsec_test_secret";
+  const { getProviderByName } = require("../api/_lib/payments");
+  const stripe = getProviderByName("stripe");
+  const original = stripe.client.checkout.sessions.retrieve;
+  try {
+    const slot = await h.makeSlot("geometria-kol-3d", { time: "22:30" });
+    const r = await h.post(env.base, "/api/zapis", h.bookingBody("geometria-kol-3d", slot));
+    await h.query("UPDATE payments SET provider = 'stripe', provider_ref = 'cs_test_sync' WHERE booking_id = $1", [r.json.bookingId]);
+    let calls = 0, paid = false;
+    stripe.client.checkout.sessions.retrieve = async (id) => { calls++; assert.equal(id, "cs_test_sync"); return { id, status: paid ? "complete" : "open", payment_status: paid ? "paid" : "unpaid" }; };
+
+    let st = await h.get(env.base, `/api/platnosc/status?id=${r.json.bookingId}`);
+    assert.equal(st.json.rezerwacja.status, "pending_payment", "płatność jeszcze trwa");
+    assert.equal(calls, 1);
+    paid = true;
+    await new Promise((ok) => setTimeout(ok, 4100));   // throttling: najwyżej raz na 4 s
+    st = await h.get(env.base, `/api/platnosc/status?id=${r.json.bookingId}`);
+    assert.equal(st.json.rezerwacja.status, "confirmed");
+    assert.equal(st.json.rezerwacja.platnosc.status, "succeeded");
+    const { rows: [n] } = await h.query("SELECT count(*)::int AS n FROM notifications WHERE booking_id = $1", [r.json.bookingId]);
+    assert.equal(n.n, 1, "powiadomienie w panelu");
+    // spóźniony webhook nie dubluje efektu
+    const payload = JSON.stringify({ id: "evt_late", object: "event", type: "checkout.session.completed",
+      data: { object: { id: "cs_test_sync", payment_status: "paid", metadata: { bookingId: r.json.bookingId } } } });
+    const sig = new Stripe("sk_test_dummy").webhooks.generateTestHeaderString({ payload, secret: "whsec_test_secret" });
+    const late = await h.post(env.base, "/api/stripe-webhook", payload, { "Stripe-Signature": sig });
+    assert.equal(late.status, 200);
+    const { rows: [n2] } = await h.query("SELECT count(*)::int AS n FROM notifications WHERE booking_id = $1", [r.json.bookingId]);
+    assert.equal(n2.n, 1);
+
+    const diag = await h.get(env.base, "/api/stripe-webhook");
+    assert.equal(diag.json.kluczStripe, "testowy (sandbox)");
+    assert.equal(diag.json.sekretWebhooka, "ustawiony");
+    assert.ok(diag.json.zdarzeniaOdStripe >= 1);
+    assert.ok(!JSON.stringify(diag.json).includes("whsec_test_secret") && !JSON.stringify(diag.json).includes("sk_test_dummy"), "bez sekretów");
+  } finally {
+    stripe.client.checkout.sessions.retrieve = original;
+    delete process.env.STRIPE_SECRET_KEY;
+    delete process.env.STRIPE_WEBHOOK_SECRET;
+  }
+});

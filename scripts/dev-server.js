@@ -6,6 +6,7 @@
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
+const { PassThrough } = require("stream");
 require("./env").load();
 const { getConfig } = require("../api/_lib/config");
 
@@ -47,6 +48,35 @@ function staticFile(pathname) {
   return null;
 }
 
+/**
+ * Body tak jak w @vercel/node (addHelpers/restoreBody): leniwe `req.body` sparsowane wg Content-Type,
+ * a surowe bajty dostępne tylko przez zdarzenia „data”/„end”. Dzięki temu testy łapią różnice względem Vercela.
+ */
+function vercelBody(req, body) {
+  const pass = new PassThrough();
+  const on = pass.on.bind(pass);
+  const originalOn = req.on.bind(req);
+  req.read = pass.read.bind(pass);
+  req.on = req.addListener = (name, cb) => (name === "data" || name === "end" ? on(name, cb) : originalOn(name, cb));
+  pass.write(body);
+  pass.end();
+  const type = String(req.headers["content-type"] || "").split(";")[0].trim();
+  let parsed, done = false;
+  Object.defineProperty(req, "body", {
+    configurable: true, enumerable: true,
+    get() {
+      if (done) return parsed;
+      done = true;
+      if (req.headers["content-type"] === undefined) parsed = undefined;
+      else if (type === "application/json") { const t = body.toString(); parsed = t ? JSON.parse(t) : {}; }
+      else if (type === "application/x-www-form-urlencoded") parsed = Object.fromEntries(new URLSearchParams(body.toString()));
+      else if (type === "text/plain") parsed = body.toString();
+      else if (type === "application/octet-stream") parsed = body;
+      return parsed;
+    },
+  });
+}
+
 function createServer() {
   return http.createServer(async (req, res) => {
     const url = new URL(req.url, "http://localhost");
@@ -82,7 +112,7 @@ function createServer() {
       if (!fs.existsSync(file)) return notFound(res);
       const chunks = [];
       for await (const c of req) chunks.push(c);
-      req.rawBody = Buffer.concat(chunks);
+      vercelBody(req, Buffer.concat(chunks));
       req.url = pathname + search;
       try {
         return await require(file)(req, res);
