@@ -26,6 +26,8 @@ function getConfig() {
     publicBaseUrl: (env.PUBLIC_BASE_URL || "").replace(/\/+$/, ""),
     databaseUrl: env.DATABASE_URL,
     holdMinutes: Math.max(1, Number(env.HOLD_MINUTES) || 15),
+    leadMinutes: Number.isFinite(Number(env.BOOKING_LEAD_MINUTES)) && env.BOOKING_LEAD_MINUTES !== undefined ? Number(env.BOOKING_LEAD_MINUTES) : 60,
+    daysAhead: 60,
     cronSecret: env.CRON_SECRET || "",
   };
 }

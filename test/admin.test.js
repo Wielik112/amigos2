@@ -1,35 +1,31 @@
 const { test, before, after } = require("node:test");
 const assert = require("node:assert/strict");
 const h = require("./helpers");
-const av = require("../api/_lib/availability");
 
 let env, cookie;
 before(async () => { env = await h.setup(); cookie = await h.adminCookie(env.base); });
 after(async () => { await env.close(); });
 
-const req = async (method, path, body, headers = { cookie }) => {
+const req = async (method, path, body, headers = {}) => {
   const res = await fetch(env.base + path, {
     method, headers: { "Content-Type": "application/json", ...headers }, body: body ? JSON.stringify(body) : undefined });
   return { status: res.status, json: await res.json().catch(() => ({})) };
 };
-const svcId = async (slug) => (await h.query("SELECT id FROM services WHERE slug = $1", [slug])).rows[0].id;
-const free = async (slug, date, extra = "") => (await h.get(env.base, `/api/terminy?usluga=${slug}&dzien=${date}${extra}`)).json.terminy.map((t) => t.godzina);
 
 test("endpointy admina bez sesji zwracają 401", async () => {
   const id = "00000000-0000-4000-8000-000000000000";
   const calls = [
-    ["GET", "/api/admin/me"], ["GET", "/api/admin/rezerwacje"], ["POST", "/api/admin/rezerwacje", {}], ["GET", `/api/admin/rezerwacje/${id}`],
-    ["POST", `/api/admin/rezerwacje/${id}/anuluj`, {}], ["GET", "/api/admin/wolne?usluga=1&dzien=2030-01-01"], ["GET", "/api/admin/kalendarz"],
-    ["GET", "/api/admin/uslugi"], ["PATCH", "/api/admin/uslugi/1", { zaliczka: 1 }], ["POST", "/api/admin/uslugi/1/domyslne-czasy"],
-    ["GET", "/api/admin/grafik/1"], ["PUT", "/api/admin/grafik/1/godziny", { godziny: [] }],
-    ["POST", "/api/admin/wyjatki", {}], ["DELETE", "/api/admin/wyjatki/1"], ["POST", "/api/admin/blokady", {}], ["DELETE", "/api/admin/blokady/1"],
-    ["GET", "/api/admin/stanowiska"], ["POST", "/api/admin/stanowiska", {}], ["PATCH", "/api/admin/stanowiska/1", {}], ["DELETE", "/api/admin/stanowiska/1"],
-    ["GET", "/api/admin/powiadomienia"], ["POST", "/api/admin/powiadomienia/przeczytane", { wszystkie: true }],
+    ["GET", "/api/admin/me"], ["GET", "/api/admin/rezerwacje"], ["GET", `/api/admin/rezerwacje/${id}`],
+    ["POST", `/api/admin/rezerwacje/${id}/anuluj`, {}], ["GET", "/api/admin/uslugi"], ["PATCH", "/api/admin/uslugi/1", { zaliczka: 1 }],
+    ["GET", "/api/admin/sloty?usluga=1"], ["POST", "/api/admin/sloty/generuj", {}], ["POST", "/api/admin/sloty/blokada", {}],
+    ["DELETE", "/api/admin/sloty/1"], ["GET", "/api/admin/powiadomienia"], ["POST", "/api/admin/powiadomienia/przeczytane", { wszystkie: true }],
     ["POST", "/api/admin/logout"], ["GET", "/api/admin/cokolwiek"],
   ];
   for (const [m, p, b] of calls) {
-    assert.equal((await req(m, p, b, {})).status, 401, `${m} ${p}`);
-    assert.equal((await req(m, p, b, { cookie: "amigos_admin=zly-token" })).status, 401, `${m} ${p} (zły token)`);
+    const r = await req(m, p, b);
+    assert.equal(r.status, 401, `${m} ${p}`);
+    const bogus = await req(m, p, b, { cookie: "amigos_admin=zly-token" });
+    assert.equal(bogus.status, 401, `${m} ${p} (zły token)`);
   }
 });
 
@@ -48,12 +44,15 @@ test("logowanie: złe hasło 401, sesja w ciasteczku httpOnly, limit prób", asy
 });
 
 test("anulowanie przez admina zwalnia termin i zapisuje kto/kiedy/dlaczego", async () => {
-  const slot = h.pick({ days: 2, time: "10:00" });
-  const r = await h.post(env.base, "/api/zapis", h.bookingBody("geometria-kol-3d", slot));
-  await h.post(env.base, "/api/platnosc/mock", { paymentId: r.json.redirectUrl.split("/").pop(), wynik: "zaplac" });
-  assert.ok(!(await free("geometria-kol-3d", slot.date)).includes(slot.time));
+  const slot = await h.makeSlot("stacja-kontroli-pojazdow", { time: "21:00" });
+  const r = await h.post(env.base, "/api/zapis", h.bookingBody("stacja-kontroli-pojazdow", slot));
+  const paymentId = r.json.redirectUrl.split("/").pop();
+  await h.post(env.base, "/api/platnosc/mock", { paymentId, wynik: "zaplac" });
 
-  const c = await req("POST", `/api/admin/rezerwacje/${r.json.bookingId}/anuluj`, { powod: "Klient zadzwonił" });
+  let free = await h.get(env.base, `/api/terminy?usluga=stacja-kontroli-pojazdow&dzien=${slot.date}`);
+  assert.ok(!free.json.terminy.some((t) => t.godzina === slot.time));
+
+  const c = await req("POST", `/api/admin/rezerwacje/${r.json.bookingId}/anuluj`, { powod: "Klient zadzwonił" }, { cookie });
   assert.equal(c.status, 200);
   assert.equal(c.json.rezerwacja.status, "cancelled");
   assert.equal(c.json.rezerwacja.anulowal, "admin");
@@ -61,156 +60,59 @@ test("anulowanie przez admina zwalnia termin i zapisuje kto/kiedy/dlaczego", asy
   assert.ok(c.json.rezerwacja.anulowano);
   assert.equal(c.json.zwrot.refunded, true, "mock: płatność oznaczona jako zwrócona");
   assert.equal(c.json.rezerwacja.platnosci[0].status, "refunded");
-  assert.ok((await free("geometria-kol-3d", slot.date)).includes(slot.time), "termin wrócił do puli");
-  assert.equal((await req("POST", `/api/admin/rezerwacje/${r.json.bookingId}/anuluj`, {})).status, 409);
-  assert.equal((await h.post(env.base, "/api/zapis", h.bookingBody("geometria-kol-3d", slot, { imie: "Ewa" }))).status, 200);
+
+  free = await h.get(env.base, `/api/terminy?usluga=stacja-kontroli-pojazdow&dzien=${slot.date}`);
+  assert.ok(free.json.terminy.some((t) => t.godzina === slot.time), "termin wrócił do puli");
+
+  const again = await req("POST", `/api/admin/rezerwacje/${r.json.bookingId}/anuluj`, {}, { cookie });
+  assert.equal(again.status, 409);
+
+  // ktoś inny może teraz zarezerwować ten termin
+  const r2 = await h.post(env.base, "/api/zapis", h.bookingBody("stacja-kontroli-pojazdow", slot, { imie: "Ewa" }));
+  assert.equal(r2.status, 200);
 });
 
-test("rezerwacja wpisana w panelu (telefon) od razu blokuje termin online; kolizja i poza grafikiem", async () => {
-  const geo = await svcId("geometria-kol-3d");
-  const day = h.pick({ days: 3 });
-  const add = (extra) => req("POST", "/api/admin/rezerwacje", { usluga: geo, data: day.date, godzina: "11:00", czas: 60, imie: "Pan Telefon", telefon: "600 700 800", ...extra });
+test("grafik: nie da się usunąć slotu z rezerwacją, można go zablokować; generator i blokada dnia", async () => {
+  const { rows: [svc] } = await h.query("SELECT id FROM services WHERE slug = 'myjnia-reczna'");
+  const slot = await h.makeSlot("myjnia-reczna", { time: "21:00" });
+  await h.query("UPDATE services SET deposit_required = false WHERE id = $1", [svc.id]);
+  const r = await h.post(env.base, "/api/zapis", h.bookingBody("myjnia-reczna", slot));
+  assert.equal(r.json.status, "confirmed");
 
-  const wolne = await req("GET", `/api/admin/wolne?usluga=${geo}&dzien=${day.date}&czas=60`);
-  assert.ok(wolne.json.terminy.some((t) => t.godzina === "11:00" && t.do === "12:00"));
-  const a = await add();
-  assert.equal(a.status, 200, JSON.stringify(a.json));
-  assert.equal(a.json.rezerwacja.status, "confirmed");
-  assert.equal(a.json.rezerwacja.zrodlo, "telefon");
-  assert.equal(a.json.rezerwacja.godzinaDo, "12:00");
-  const online = await free("geometria-kol-3d", day.date);
-  assert.ok(!online.includes("11:00") && !online.includes("11:30"), "zajęte online");
+  const del = await req("DELETE", `/api/admin/sloty/${slot.id}`, null, { cookie });
+  assert.equal(del.status, 409);
+  const blk = await req("POST", "/api/admin/sloty/blokada", { ids: [String(slot.id)], zablokuj: true }, { cookie });
+  assert.equal(blk.json.zmieniono, 1);
 
-  const clash = await add({ godzina: "11:30", czas: 30, telefon: "600 700 801" });
-  assert.equal(clash.status, 409);
-  const late = await add({ godzina: "21:15", czas: 30, telefon: "600 700 802" });
-  assert.equal(late.status, 409, "poza godzinami bez zaznaczenia „poza grafikiem”");
-  const late2 = await add({ godzina: "21:15", czas: 30, telefon: "600 700 802", pozaGrafikiem: true });
-  assert.equal(late2.status, 200);
-  const late3 = await add({ godzina: "21:30", czas: 30, telefon: "600 700 803", pozaGrafikiem: true });
-  assert.equal(late3.status, 409, "poza grafikiem też nie nałoży się na inną wizytę (z zapasem)");
-  assert.equal((await add({ telefon: "123" })).status, 422);
+  const empty = await h.makeSlot("myjnia-reczna", { time: "22:00" });
+  assert.equal((await req("DELETE", `/api/admin/sloty/${empty.id}`, null, { cookie })).status, 200);
 
-  const cal = await req("GET", `/api/admin/kalendarz?dzien=${day.date}`);
-  const evs = cal.json.rezerwacje.filter((b) => b.usluga === geo);
-  assert.deepEqual(evs.map((b) => b.godzina), ["11:00", "21:15"]);
-  assert.ok(cal.json.do >= "22:00", "siatka kalendarza obejmuje wizytę po godzinach");
+  const day = h.ymdPL(new Date(Date.now() + 10 * 86400000));
+  const gen = await req("POST", "/api/admin/sloty/generuj", { usluga: svc.id, od: day, do: day, dni: [1, 2, 3, 4, 5, 6, 7],
+    godzinaOd: "10:00", godzinaDo: "12:00", dlugosc: 45, pojemnosc: 2 }, { cookie });
+  assert.equal(gen.json.utworzono, 2);   // 10:00 i 10:45 (11:30 + 45 min > 12:00)
+  const day2 = await req("POST", "/api/admin/sloty/blokada", { usluga: svc.id, dzien: day, zablokuj: true }, { cookie });
+  assert.equal(day2.json.zmieniono, 2);
+  const list = await req("GET", `/api/admin/sloty?usluga=${svc.id}&od=${day}&dni=1`, null, { cookie });
+  assert.ok(list.json.sloty.every((s) => s.zablokowany));
+  const bad = await req("POST", "/api/admin/sloty/generuj", { usluga: svc.id, od: day, do: day, dni: [], godzinaOd: "10:00", godzinaDo: "12:00", dlugosc: 45 }, { cookie });
+  assert.equal(bad.status, 422);
+  await h.query("UPDATE services SET deposit_required = true WHERE id = $1", [svc.id]);
 });
 
-test("grafik: zapis godzin z przerwą, wyjątek z ostrzeżeniem o kolizji, blokada czasu", async () => {
-  const myj = await svcId("myjnia-reczna");
-  const day = h.pick({ days: 4 });
-  const dow = av.isoDow(day.date);
-  const g0 = await req("GET", `/api/admin/grafik/${myj}`);
-  assert.ok(g0.json.godziny.length > 0);
-  assert.ok(g0.json.swieta.length > 0, "lista świąt");
-
-  const godziny = g0.json.godziny.filter((x) => x.dzien !== dow).concat([{ dzien: dow, od: "10:00", do: "12:00" }, { dzien: dow, od: "12:30", do: "15:00" }]);
-  assert.equal((await req("PUT", `/api/admin/grafik/${myj}/godziny`, { godziny })).status, 200);
-  const t = await free("myjnia-reczna", day.date, "&pakiet=Mycie%20r%C4%99czne%20nadwozia&pojazd=Osobowy");
-  assert.equal(t[0], "10:00");
-  assert.ok(!t.includes("11:30"), "11:30 + 45 min wchodzi w przerwę");
-  assert.ok(t.includes("12:30"));
-  const overlap = await req("PUT", `/api/admin/grafik/${myj}/godziny`, { godziny: [{ dzien: 1, od: "08:00", do: "12:00" }, { dzien: 1, od: "11:00", do: "14:00" }] });
-  assert.equal(overlap.status, 422);
-
-  await h.post(env.base, "/api/zapis", h.bookingBody("myjnia-reczna", { date: day.date, time: "10:00" }));
-  const exc = await req("POST", "/api/admin/wyjatki", { usluga: myj, dzien: day.date, zamkniete: true, notatka: "Awaria" });
-  assert.equal(exc.json.kolizje, 1, "ostrzeżenie: tego dnia jest już wizyta");
-  assert.equal((await free("myjnia-reczna", day.date)).length, 0);
-  const g1 = await req("GET", `/api/admin/grafik/${myj}`);
-  const ex = g1.json.wyjatki.find((x) => x.dzien === day.date);
-  assert.equal(ex.notatka, "Awaria");
-  await req("DELETE", `/api/admin/wyjatki/${ex.id}`);
-  assert.ok((await free("myjnia-reczna", day.date)).length > 0);
-
-  const blk = await req("POST", "/api/admin/blokady", { usluga: myj, dzien: day.date, od: "12:30", do: "15:00", powod: "Szkolenie" });
-  assert.equal(blk.status, 200);
-  assert.ok(!(await free("myjnia-reczna", day.date)).some((x) => x >= "12:30"));
-  const cal = await req("GET", `/api/admin/kalendarz?dzien=${day.date}`);
-  assert.ok(cal.json.blokady.some((b) => b.powod === "Szkolenie"));
-});
-
-test("zasady usługi: zapas, krok, wyprzedzenie, czasy trwania, stanowiska", async () => {
-  const geo = await svcId("geometria-kol-3d");
-  const day = h.pick({ days: 5 });
-  let up = await req("PATCH", `/api/admin/uslugi/${geo}`, { krok: 15, zapas: 0, czasBazowy: 0,
-    czasy: { zakres: { "Sam pomiar": 25 }, pojazd: { "Osobowy": 0 }, nieistnieje: { x: 5 } } });
+test("ustawienia usług: zmiana zaliczki działa dla nowych rezerwacji", async () => {
+  const { rows: [svc] } = await h.query("SELECT id FROM services WHERE slug = 'geometria-kol-3d'");
+  const up = await req("PATCH", `/api/admin/uslugi/${svc.id}`, { zaliczka: 7500, zaliczkaWymagana: true, dlugoscSlotu: 60, aktywna: true }, { cookie });
   assert.equal(up.status, 200);
-  assert.deepEqual(up.json.usluga.czasy, { zakres: { "Sam pomiar": 25 }, pojazd: { "Osobowy": 0 } });
-  const r = await h.get(env.base, `/api/terminy?usluga=geometria-kol-3d&dzien=${day.date}&zakres=Sam%20pomiar&pojazd=Osobowy`);
-  assert.equal(r.json.czas, 25);
-  assert.equal(av.toMin(r.json.terminy[1].godzina) - av.toMin(r.json.terminy[0].godzina), 15, "krok 15 min");
-
-  assert.equal((await req("PATCH", `/api/admin/uslugi/${geo}`, { krok: 7 })).status, 422);
-  assert.equal((await req("PATCH", `/api/admin/uslugi/${geo}`, { stanowiska: [] })).status, 422, "usługa bez stanowiska");
-  up = await req("POST", `/api/admin/uslugi/${geo}/domyslne-czasy`);
-  assert.equal(up.json.usluga.czasy.zakres["Geometria całego auta"], 60);
-
-  const off = await req("PATCH", `/api/admin/uslugi/${geo}`, { aktywna: false });
+  assert.equal(up.json.usluga.zaliczka, 7500);
+  const slot = await h.makeSlot("geometria-kol-3d", { time: "21:00" });
+  const r = await h.post(env.base, "/api/zapis", h.bookingBody("geometria-kol-3d", slot));
+  const { rows: [p] } = await h.query("SELECT amount FROM payments WHERE booking_id = $1", [r.json.bookingId]);
+  assert.equal(p.amount, 7500);
+  const bad = await req("PATCH", `/api/admin/uslugi/${svc.id}`, { dlugoscSlotu: 3 }, { cookie });
+  assert.equal(bad.status, 422);
+  const off = await req("PATCH", `/api/admin/uslugi/${svc.id}`, { aktywna: false }, { cookie });
   assert.equal(off.json.usluga.aktywna, false);
-  assert.equal((await h.post(env.base, "/api/zapis", h.bookingBody("geometria-kol-3d", h.pick({ days: 5, time: "12:00" })))).status, 422);
-  await req("PATCH", `/api/admin/uslugi/${geo}`, { aktywna: true, zapas: 10, krok: 30 });
-});
-
-test("stanowiska: dodanie zwiększa liczbę równoczesnych wizyt, wyłączenie ją zmniejsza", async () => {
-  const geo = await svcId("geometria-kol-3d");
-  const day = h.pick({ days: 6, time: "10:00" });
-  assert.equal((await h.post(env.base, "/api/zapis", h.bookingBody("geometria-kol-3d", day))).status, 200);
-  assert.equal((await h.post(env.base, "/api/zapis", h.bookingBody("geometria-kol-3d", day))).status, 409);
-
-  const add = await req("POST", "/api/admin/stanowiska", { nazwa: "Geometria – stanowisko 2", uslugi: [geo] });
-  const st = add.json.stanowiska.find((s) => s.nazwa === "Geometria – stanowisko 2");
-  assert.deepEqual(st.uslugi, [geo]);
-  assert.equal((await h.post(env.base, "/api/zapis", h.bookingBody("geometria-kol-3d", day))).status, 200, "drugie stanowisko przyjmuje wizytę");
-
-  await req("PATCH", `/api/admin/stanowiska/${st.id}`, { aktywne: false });
-  assert.ok(!(await free("geometria-kol-3d", day.date)).includes("10:00"));
-  const del = await req("DELETE", `/api/admin/stanowiska/${st.id}`);
-  assert.equal(del.status, 409, "stanowisko z historią można tylko wyłączyć");
-  const tmp = await req("POST", "/api/admin/stanowiska", { nazwa: "Do usunięcia" });
-  const tmpId = tmp.json.stanowiska.find((s) => s.nazwa === "Do usunięcia").id;
-  assert.equal((await req("DELETE", `/api/admin/stanowiska/${tmpId}`)).status, 200);
-});
-
-test("lista rezerwacji: wyszukiwanie po telefonie i numerze rejestracyjnym", async () => {
-  const phone = h.randomPhone();
-  const r = await h.post(env.base, "/api/zapis", h.bookingBody("stacja-kontroli-pojazdow", h.pick({ days: 7 }), { telefon: phone, rejestracja: "FNW 4242X" }));
-  assert.equal(r.status, 200);
-  const byPhone = await req("GET", `/api/admin/rezerwacje?szukaj=${phone.slice(-6)}`);
-  assert.ok(byPhone.json.rezerwacje.some((x) => x.id === r.json.bookingId));
-  const byPlate = await req("GET", "/api/admin/rezerwacje?szukaj=fnw4242x");
-  assert.ok(byPlate.json.rezerwacje.some((x) => x.id === r.json.bookingId));
-  assert.equal(byPlate.json.rezerwacje[0].stanowisko.startsWith("Stacja kontroli"), true);
-});
-
-test("przełożenie wizyty: stary termin wraca do puli, nowy jest zajęty, zaliczka zostaje", async () => {
-  const day = h.pick({ days: 8, time: "10:00" });
-  const r = await h.post(env.base, "/api/zapis", h.bookingBody("geometria-kol-3d", day));
-  const id = r.json.bookingId;
-  const pend = await req("POST", `/api/admin/rezerwacje/${id}/przeloz`, { data: day.date, godzina: "12:00" });
-  assert.equal(pend.status, 409, "wizyty w trakcie płatności nie przekładamy");
-  await h.post(env.base, "/api/platnosc/mock", { paymentId: r.json.redirectUrl.split("/").pop(), wynik: "zaplac" });
-
-  const geo = await svcId("geometria-kol-3d");
-  const w = await req("GET", `/api/admin/wolne?usluga=${geo}&dzien=${day.date}&czas=45&bez=${id}`);
-  assert.ok(w.json.terminy.some((t) => t.godzina === "10:15"), "z „bez” przekładana wizyta nie blokuje sama siebie");
-
-  const mv = await req("POST", `/api/admin/rezerwacje/${id}/przeloz`, { data: day.date, godzina: "10:15" });
-  assert.equal(mv.status, 200, JSON.stringify(mv.json));
-  assert.equal(mv.json.rezerwacja.godzina, "10:15");
-  assert.equal(mv.json.rezerwacja.godzinaDo, "11:00");
-  assert.match(mv.json.rezerwacja.notatki, /Przełożona z .* 10:00 przez admin/);
-  assert.equal(mv.json.rezerwacja.platnosci[0].status, "succeeded");
-
-  const later = h.pick({ days: 9 });
-  const mv2 = await req("POST", `/api/admin/rezerwacje/${id}/przeloz`, { data: later.date, godzina: "14:00", czas: 60 });
-  assert.equal(mv2.json.rezerwacja.godzinaDo, "15:00");
-  assert.ok((await free("geometria-kol-3d", day.date)).includes("10:00"), "stary termin wolny");
-  assert.ok(!(await free("geometria-kol-3d", later.date)).includes("14:00"), "nowy termin zajęty");
-
-  const other = await h.post(env.base, "/api/zapis", h.bookingBody("geometria-kol-3d", { date: later.date, time: "16:00" }));
-  await h.post(env.base, "/api/platnosc/mock", { paymentId: other.json.redirectUrl.split("/").pop(), wynik: "zaplac" });
-  const clash = await req("POST", `/api/admin/rezerwacje/${other.json.bookingId}/przeloz`, { data: later.date, godzina: "14:30" });
-  assert.equal(clash.status, 409, "nie nałoży się na inną wizytę");
+  const blocked = await h.post(env.base, "/api/zapis", h.bookingBody("geometria-kol-3d", await h.makeSlot("geometria-kol-3d", { time: "22:00" })));
+  assert.equal(blocked.status, 422);
 });

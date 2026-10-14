@@ -8,7 +8,7 @@ before(async () => { env = await h.setup(); });
 after(async () => { await env.close(); });
 
 test("pełny flow mock: rezerwacja → płatność → confirmed → powiadomienie w panelu", async () => {
-  const slot = h.pick({ days: 2, time: "10:00" });
+  const slot = await h.makeSlot("myjnia-reczna", { time: "21:00" });
   const r = await h.post(env.base, "/api/zapis", h.bookingBody("myjnia-reczna", slot));
   assert.equal(r.status, 200);
   assert.equal(r.json.status, "pending_payment");
@@ -58,7 +58,7 @@ test("pełny flow mock: rezerwacja → płatność → confirmed → powiadomien
 });
 
 test("mock: „Anuluj” zwalnia termin od razu, a po czasie nie da się zapłacić", async () => {
-  const slot = h.pick({ days: 2, time: "14:00" });
+  const slot = await h.makeSlot("myjnia-reczna", { time: "21:30" });
   const r = await h.post(env.base, "/api/zapis", h.bookingBody("myjnia-reczna", slot));
   const paymentId = r.json.redirectUrl.split("/").pop();
   const c = await h.post(env.base, "/api/platnosc/mock", { paymentId, wynik: "anuluj" });
@@ -79,7 +79,7 @@ test("webhook Stripe: zła sygnatura odrzucona, powtórzone zdarzenie nie dubluj
   process.env.STRIPE_SECRET_KEY = "sk_test_dummy";
   process.env.STRIPE_WEBHOOK_SECRET = "whsec_test_secret";
   try {
-    const slot = h.pick({ days: 3, time: "10:00" });
+    const slot = await h.makeSlot("geometria-kol-3d", { time: "21:00" });
     const r = await h.post(env.base, "/api/zapis", h.bookingBody("geometria-kol-3d", slot));
     const bookingId = r.json.bookingId;
     // udajemy płatność utworzoną przez Stripe (bez łączenia z API Stripe)
@@ -131,7 +131,7 @@ test("webhook Stripe: checkout.session.expired zwalnia termin", async () => {
   process.env.STRIPE_SECRET_KEY = "sk_test_dummy";
   process.env.STRIPE_WEBHOOK_SECRET = "whsec_test_secret";
   try {
-    const slot = h.pick({ days: 3, time: "15:00" });
+    const slot = await h.makeSlot("geometria-kol-3d", { time: "21:30" });
     const r = await h.post(env.base, "/api/zapis", h.bookingBody("geometria-kol-3d", slot));
     const { rows: [p] } = await h.query("UPDATE payments SET provider = 'stripe', provider_ref = 'cs_test_exp' WHERE booking_id = $1 RETURNING id", [r.json.bookingId]);
     const payload = JSON.stringify({ id: "evt_exp", object: "event", type: "checkout.session.expired",

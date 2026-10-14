@@ -23,7 +23,7 @@ module.exports = handler(async (req, res) => {
     const r = await publicStatus(needId(url.searchParams.get("id")));
     if (!r) throw new HttpError(404, "Nie znaleziono rezerwacji.");
     return sendJson(res, 200, { ok: true, rezerwacja: {
-      status: r.status, usluga: r.service_name, data: r.date || (r.details && r.details.data) || null, godzina: r.time, godzinaDo: r.time_end,
+      status: r.status, usluga: r.service_name, data: r.date || (r.details && r.details.data) || null, godzina: r.time,
       pora: r.details && r.details.pora, kontakt: !r.uses_slots, imie: r.customer_name, slug: r.slug,
       holdDo: r.hold_expires_at, platnosc: r.payment_id ? { status: r.payment_status, kwota: r.amount, dostawca: r.provider } : null,
     } });
@@ -34,7 +34,7 @@ module.exports = handler(async (req, res) => {
     if (!p || p.provider !== "mock") throw new HttpError(404, "Nie znaleziono płatności.");
     return sendJson(res, 200, { ok: true, platnosc: {
       status: p.status, kwota: p.amount, waluta: p.currency, rezerwacja: p.booking_id, statusRezerwacji: p.booking_status,
-      usluga: p.service_name, data: p.date, godzina: p.time, godzinaDo: p.time_end, holdDo: p.hold_expires_at,
+      usluga: p.service_name, data: p.date, godzina: p.time, holdDo: p.hold_expires_at,
     } });
   }
 

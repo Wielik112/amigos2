@@ -1,65 +1,76 @@
 /**
- * Logika rezerwacji.
+ * Logika terminów i rezerwacji.
  *
  * Statusy: pending_payment -> confirmed | expired | cancelled
  *
- * Wolne godziny liczy availability.js (grafik tygodniowy, stanowiska, czas trwania zależny od wyboru klienta).
  * Ochrona przed podwójną rezerwacją (na poziomie bazy, dwie warstwy):
- *  1. SELECT … FOR UPDATE na stanowiskach usługi – równoległe zapisy na te same stanowiska idą po kolei,
- *     a każdy następny widzi już zatwierdzone rezerwacje poprzedniego;
- *  2. constraint bookings_no_overlap (EXCLUDE USING gist) – dwie aktywne wizyty na tym samym stanowisku
- *     nie mogą na siebie nachodzić, nawet przy błędzie w kodzie.
+ *  1. SELECT … FOR UPDATE na wierszu slotu – równoległe transakcje na ten sam slot czekają w kolejce,
+ *     a każda następna widzi już zatwierdzone rezerwacje poprzedniej;
+ *  2. częściowy indeks unikalny bookings_active_seat (slot_id, seat) dla statusów aktywnych –
+ *     nawet przy błędzie w kodzie dwie aktywne rezerwacje nie zajmą tego samego miejsca.
  *
- * Wygasłe holdy: dostępność liczy tylko żywe holdy; przy zapisie wygasłe holdy na stanowiskach usługi są
- * oznaczane jako expired (inaczej constraint by je liczył); dodatkowo porządkuje je cron (api/cron.js).
+ * Wygasłe holdy zwalniamy: przy każdym odczycie dostępności (zapytanie liczy tylko żywe holdy
+ * i dodatkowo je oznacza), przy próbie rezerwacji danego slotu oraz w zadaniu cyklicznym (api/cron.js).
  */
 const { query, tx } = require("./db");
 const { getConfig, TZ } = require("./config");
 const { HttpError } = require("./http");
 const { getProvider, getProviderByName } = require("./payments");
-const av = require("./availability");
 
 // status widziany z zewnątrz: hold po czasie = wygasła, nawet zanim cron/rezerwacja zapisze to w bazie
 const EFFECTIVE_STATUS = "(CASE WHEN b.status = 'pending_payment' AND b.hold_expires_at <= now() THEN 'expired' ELSE b.status END)";
 
 const SLOT_TAKEN = "Ten termin właśnie został zajęty – wybierz inną godzinę.";
-const taken = () => new HttpError(409, SLOT_TAKEN, { code: "slot_taken", fields: ["godzina"] });
 
-/** Oznacza wygasłe holdy jako expired (opcjonalnie tylko na wskazanych stanowiskach). Zwraca liczbę zwolnionych. */
-async function expireHolds(client, resourceIds = null) {
+/** Oznacza wygasłe holdy jako expired (opcjonalnie tylko dla jednego slotu). Zwraca liczbę zwolnionych. */
+async function expireHolds(client, slotId = null) {
   const db = client || { query };
   const { rows } = await db.query(
     `WITH exp AS (
        UPDATE bookings SET status = 'expired'
-        WHERE status = 'pending_payment' AND hold_expires_at <= now() AND ($1::int[] IS NULL OR resource_id = ANY($1::int[]))
+        WHERE status = 'pending_payment' AND hold_expires_at <= now() AND ($1::bigint IS NULL OR slot_id = $1)
        RETURNING payment_id),
      pay AS (
        UPDATE payments SET status = 'expired', updated_at = now()
         WHERE id IN (SELECT payment_id FROM exp WHERE payment_id IS NOT NULL) AND status = 'pending')
      SELECT count(*)::int AS n FROM exp`,
-    [resourceIds]);
+    [slotId]);
   return rows[0].n;
 }
 
-/** Blokuje stanowiska (w stałej kolejności – bez zakleszczeń) na czas transakcji i sprząta na nich wygasłe holdy. */
-async function lockResources(c, ids) {
-  if (!ids.length) return;
-  await c.query("SELECT id FROM resources WHERE id = ANY($1::int[]) ORDER BY id FOR UPDATE", [ids]);
-  await expireHolds(c, ids);
+/** Wolne terminy usługi w danym dniu (dzień lokalny Europe/Warsaw). */
+async function listAvailable(slug, ymd) {
+  const { leadMinutes } = getConfig();
+  const { rows } = await query(
+    `SELECT s.id, s.start_at, s.end_at,
+            to_char(s.start_at AT TIME ZONE '${TZ}', 'HH24:MI') AS time,
+            s.capacity - count(b.id)::int AS free
+       FROM slots s
+       JOIN services sv ON sv.id = s.service_id
+       LEFT JOIN bookings b ON b.slot_id = s.id
+            AND (b.status = 'confirmed' OR (b.status = 'pending_payment' AND b.hold_expires_at > now()))
+      WHERE sv.slug = $1 AND sv.active AND sv.uses_slots AND NOT s.blocked
+        AND s.start_at > now() + make_interval(mins => $3)
+        AND s.start_at >= ($2::date)::timestamp AT TIME ZONE '${TZ}'
+        AND s.start_at <  ($2::date + 1)::timestamp AT TIME ZONE '${TZ}'
+      GROUP BY s.id
+     HAVING s.capacity - count(b.id) > 0
+      ORDER BY s.start_at`,
+    [slug, ymd, leadMinutes]);
+  return rows.map((r) => ({ id: String(r.id), time: r.time, start: r.start_at.toISOString(), end: r.end_at.toISOString(), free: r.free }));
 }
 
-/** Wolne godziny dla formularza: { czas, zamkniete, terminy: [{ godzina, do, wolne }] }. */
-async function listAvailable(slug, ymd, details) {
-  const svc = await av.loadService({ query }, "slug = $1 AND active AND uses_slots", slug);
-  if (!svc) return { duration: 0, closed: "Usługa niedostępna online", starts: [] };
-  return av.freeStarts({ query }, svc, ymd, { duration: av.durationFor(svc, details) });
-}
+const firstFreeSeat = (capacity, taken) => {
+  const t = new Set(taken);
+  for (let i = 1; i <= capacity; i++) if (!t.has(i)) return i;
+  return null;
+};
 
-/** Wolne dni (kalendarz w formularzu). */
-async function listDays(slug, details) {
-  const svc = await av.loadService({ query }, "slug = $1 AND active AND uses_slots", slug);
-  if (!svc) return { duration: 0, from: null, to: null, days: {} };
-  return av.freeDays({ query }, svc, { duration: av.durationFor(svc, details) });
+async function freeSeatFor(c, slot) {
+  await expireHolds(c, slot.id);
+  const { rows } = await c.query(
+    "SELECT seat FROM bookings WHERE slot_id = $1 AND status IN ('pending_payment', 'confirmed')", [slot.id]);
+  return firstFreeSeat(slot.capacity, rows.map((r) => r.seat));
 }
 
 async function addNotification(c, bookingId, type, read = false) {
@@ -68,32 +79,8 @@ async function addNotification(c, bookingId, type, read = false) {
      ON CONFLICT (booking_id, type) DO NOTHING`, [bookingId, type, read]);
 }
 
-async function insertBooking(c, b) {
-  const { rows: [booking] } = await c.query(
-    `INSERT INTO bookings (service_id, resource_id, start_at, end_at, block_until, status, customer_name, phone, email,
-                           details, notes, consent_at, hold_expires_at, confirmed_at, source)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
-             CASE WHEN $6 = 'pending_payment' THEN now() + make_interval(mins => $13) END,
-             CASE WHEN $6 = 'confirmed' THEN now() END, $14)
-     RETURNING *`,
-    [b.serviceId, b.resourceId, b.start, b.end, b.until, b.status, b.name, b.phone, b.email || null,
-      JSON.stringify(b.details || {}), b.notes || null, b.consentAt, b.holdMinutes || 0, b.source || "online"]);
-  return booking;
-}
-
-/** Ta sama osoba, ta sama usługa, ten sam dzień – nie tworzymy drugiej rezerwacji. */
-async function findDuplicate(c, svc, phone, ymd) {
-  const { rows: [d] } = await c.query(
-    `SELECT to_char(start_at AT TIME ZONE '${TZ}', 'HH24:MI') AS time FROM bookings
-      WHERE service_id = $1 AND phone = $2 AND start_at IS NOT NULL
-        AND (start_at AT TIME ZONE '${TZ}')::date = $3::date
-        AND (status = 'confirmed' OR (status = 'pending_payment' AND hold_expires_at > now()))
-      LIMIT 1`, [svc.id, phone, ymd]);
-  return d || null;
-}
-
 /**
- * Rezerwacja z formularza (dane po validateBooking()).
+ * Tworzy rezerwację z danych po validateBooking().
  * Zwraca { booking, status, redirectUrl|null }.
  */
 async function createBooking(data) {
@@ -103,32 +90,33 @@ async function createBooking(data) {
   let created;
   try {
     created = await tx(async (c) => {
-      const svc = await av.loadService(c, "slug = $1 AND active", data.slug);
+      const { rows: [svc] } = await c.query("SELECT * FROM services WHERE slug = $1 AND active", [data.slug]);
       if (!svc) throw new HttpError(422, "Tej usługi nie można teraz zarezerwować online – zadzwoń do nas.", { fields: ["usluga"] });
 
-      let slot = null;
+      let slot = null, seat = null;
       if (svc.uses_slots) {
-        await lockResources(c, svc.resourceIds);
-        const dup = await findDuplicate(c, svc, data.phone, data.date);
-        if (dup) {
-          throw new HttpError(409, `Masz już rezerwację tej usługi w tym dniu (godz. ${dup.time}). Jeśli chcesz ją zmienić, zadzwoń do nas.`,
-            { code: "duplicate", fields: ["telefon"] });
-        }
-        const duration = av.durationFor(svc, data.details);
-        const day = await av.freeStarts(c, svc, data.date, { duration });
-        const hit = day.starts.find((s) => s.time === data.time);
-        if (!hit) throw taken();
-        slot = { resourceId: hit.resources[0], start: hit.start, end: hit.endAt,
-          until: new Date(hit.endAt.getTime() + (Number(svc.buffer_minutes) || 0) * 60000) };
+        const { rows: [s] } = await c.query(
+          `SELECT * FROM slots WHERE service_id = $1 AND start_at = ($2::date + $3::time) AT TIME ZONE '${TZ}' FOR UPDATE`,
+          [svc.id, data.date, data.time]);
+        const tooLate = s && s.start_at.getTime() <= Date.now() + cfg.leadMinutes * 60000;
+        if (!s || s.blocked || tooLate) throw new HttpError(409, "Ten termin nie jest już dostępny – wybierz inną godzinę.", { code: "slot_unavailable", fields: ["godzina"] });
+        seat = await freeSeatFor(c, s);
+        if (seat === null) throw new HttpError(409, SLOT_TAKEN, { code: "slot_taken", fields: ["godzina"] });
+        slot = s;
       }
 
       // kwota zaliczki zawsze z bazy, nigdy z żądania
       const needsPayment = svc.deposit_required && svc.deposit_amount > 0;
-      const booking = await insertBooking(c, {
-        serviceId: svc.id, resourceId: slot && slot.resourceId, start: slot && slot.start, end: slot && slot.end, until: slot && slot.until,
-        status: needsPayment ? "pending_payment" : "confirmed", name: data.customerName, phone: data.phone, email: data.email,
-        details: data.details, consentAt: new Date(), holdMinutes: Math.max(cfg.holdMinutes, provider.minHoldMinutes || 0),
-      });
+      const holdMinutes = Math.max(cfg.holdMinutes, provider.minHoldMinutes || 0);
+      const { rows: [booking] } = await c.query(
+        `INSERT INTO bookings (service_id, slot_id, seat, status, customer_name, phone, email, details, consent_at,
+                               hold_expires_at, confirmed_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now(),
+                 CASE WHEN $9 THEN now() + make_interval(mins => $10) END,
+                 CASE WHEN $9 THEN NULL ELSE now() END)
+         RETURNING *`,
+        [svc.id, slot && slot.id, seat, needsPayment ? "pending_payment" : "confirmed", data.customerName, data.phone,
+          data.email, JSON.stringify(data.details), needsPayment, holdMinutes]);
 
       let payment = null;
       if (needsPayment) {
@@ -140,19 +128,19 @@ async function createBooking(data) {
       } else {
         await addNotification(c, booking.id, "booking_confirmed");
       }
-      return { booking, payment, svc };
+      return { booking, payment, svc, slot };
     });
   } catch (e) {
-    if (e.code === "23P01" || e.code === "23505") throw taken();   // constraint w bazie złapał nakładanie się wizyt
+    if (e.code === "23505") throw new HttpError(409, SLOT_TAKEN, { code: "slot_taken", fields: ["godzina"] });
     throw e;
   }
 
-  const { booking, payment, svc } = created;
+  const { booking, payment, svc, slot } = created;
   if (!payment) return { booking, status: booking.status, redirectUrl: null };
 
-  // Wywołanie dostawcy poza transakcją – nie trzymamy blokady stanowisk w czasie żądania do Stripe.
+  // Wywołanie dostawcy poza transakcją – nie trzymamy blokady slotu w czasie żądania do Stripe.
   try {
-    const out = await provider.createPayment({ booking, payment, service: svc, slot: booking.start_at ? { start_at: booking.start_at } : null });
+    const out = await provider.createPayment({ booking, payment, service: svc, slot });
     await query("UPDATE payments SET provider_ref = $2, updated_at = now() WHERE id = $1", [payment.id, out.providerRef]);
     return { booking, status: booking.status, redirectUrl: out.redirectUrl, paymentId: payment.id };
   } catch (e) {
@@ -162,83 +150,6 @@ async function createBooking(data) {
       await c.query("UPDATE bookings SET status = 'expired' WHERE id = $1 AND status = 'pending_payment'", [booking.id]);
     });
     throw new HttpError(502, "Nie udało się rozpocząć płatności. Spróbuj ponownie za chwilę.");
-  }
-}
-
-/**
- * Wybór terminu w panelu (rezerwacja telefoniczna, przełożenie): sprawdza godziny pracy (chyba że „poza grafikiem”),
- * wolne stanowisko i blokady. Bez minimalnego wyprzedzenia. Zwraca { resourceId, start, end, until }.
- */
-async function pickAdminSlot(c, svc, o, { excludeBooking, preferResource } = {}) {
-  const ids = o.resourceId ? [o.resourceId] : svc.resourceIds;
-  if (o.resourceId && !svc.resourceIds.includes(o.resourceId)) throw new HttpError(422, "To stanowisko nie obsługuje tej usługi.");
-  await lockResources(c, ids);
-  const duration = o.duration;
-  let free, start;
-  if (o.outsideHours) {
-    start = av.localToUtc(o.date, av.toMin(o.time));
-    free = await av.resourcesFreeAt(c, svc, start, duration, { onlyResource: o.resourceId, excludeBooking });
-  } else {
-    const day = await av.freeStarts(c, svc, o.date, { duration, ignoreNotice: true, step: 5, onlyResource: o.resourceId, excludeBooking });
-    const hit = day.starts.find((s) => s.time === o.time);
-    if (!hit) {
-      throw new HttpError(409, day.closed ? `Ten dzień jest zamknięty (${day.closed}). Zaznacz „poza grafikiem”, jeśli mimo to chcesz zapisać.`
-        : "W tej godzinie nie ma wolnego stanowiska (albo jest poza godzinami pracy). Wybierz inną godzinę albo zaznacz „poza grafikiem”.");
-    }
-    free = hit.resources;
-    start = hit.start;
-  }
-  if (!free.length) throw new HttpError(409, "Stanowisko jest w tym czasie zajęte – wybierz inną godzinę albo inne stanowisko.");
-  const resourceId = free.includes(preferResource) ? preferResource : free[0];
-  const end = new Date(start.getTime() + duration * 60000);
-  return { resourceId, start, end, until: new Date(end.getTime() + (Number(svc.buffer_minutes) || 0) * 60000) };
-}
-
-/**
- * Rezerwacja wpisana w panelu (np. z telefonu): od razu potwierdzona, bez zaliczki.
- * o: { serviceId, date, time, duration?, resourceId?, outsideHours?, name, phone, email?, notes?, details? }
- */
-async function createManualBooking(o, adminLogin) {
-  try {
-    return await tx(async (c) => {
-      const svc = await av.loadService(c, "id = $1", o.serviceId);
-      if (!svc || !svc.uses_slots) throw new HttpError(422, "Wybierz usługę z rezerwacją terminu.");
-      const slot = await pickAdminSlot(c, svc, { ...o, duration: o.duration || av.durationFor(svc, o.details || {}) });
-      return insertBooking(c, {
-        serviceId: svc.id, resourceId: slot.resourceId, start: slot.start, end: slot.end, until: slot.until,
-        status: "confirmed", name: o.name, phone: o.phone, email: o.email, details: o.details,
-        notes: [o.notes, `Dodana w panelu przez ${adminLogin}`].filter(Boolean).join(" · "), consentAt: new Date(), source: "telefon",
-      });
-    });
-  } catch (e) {
-    if (e.code === "23P01") throw new HttpError(409, "Stanowisko jest w tym czasie zajęte – wybierz inną godzinę.");
-    throw e;
-  }
-}
-
-/**
- * Przełożenie potwierdzonej wizyty na inny termin (klient zadzwonił). Zaliczka i dane zostają,
- * a stary termin od razu wraca do puli. o: { date, time, duration?, resourceId?, outsideHours? }
- */
-async function rescheduleBooking(id, o, adminLogin) {
-  try {
-    return await tx(async (c) => {
-      const { rows: [b] } = await c.query("SELECT * FROM bookings WHERE id = $1 FOR UPDATE", [id]);
-      if (!b) throw new HttpError(404, "Nie ma takiej rezerwacji.");
-      if (b.status !== "confirmed" || !b.start_at) throw new HttpError(409, "Przełożyć można tylko potwierdzoną wizytę z terminem.");
-      const svc = await av.loadService(c, "id = $1", b.service_id);
-      const duration = o.duration || Math.round((b.end_at - b.start_at) / 60000);
-      const slot = await pickAdminSlot(c, svc, { ...o, duration }, { excludeBooking: id, preferResource: b.resource_id });
-      const was = `${av.localYmd(b.start_at)} ${av.localHm(b.start_at)}`;
-      await c.query(
-        `UPDATE bookings SET start_at = $2, end_at = $3, block_until = $4, resource_id = $5,
-                notes = concat_ws(' · ', notes, $6::text) WHERE id = $1`,
-        [id, slot.start, slot.end, slot.until, slot.resourceId, `Przełożona z ${was} przez ${adminLogin}`]);
-      return { from: was };
-    });
-  } catch (e) {
-    if (e.code === "23P01") throw new HttpError(409, "Stanowisko jest w tym czasie zajęte – wybierz inną godzinę.");
-    throw e;
   }
 }
 
@@ -267,27 +178,25 @@ async function applyPaymentEvent(event) {
       await c.query("UPDATE payments SET status = 'succeeded', updated_at = now() WHERE id = $1", [payment.id]);
       if (booking.payment_id !== payment.id) return { status: booking.status };
 
+      let seat = booking.seat;
       const lapsed = booking.status === "expired" ||
         (booking.status === "pending_payment" && new Date(booking.hold_expires_at).getTime() <= Date.now());
-      if (booking.status !== "pending_payment" && booking.status !== "expired") return { status: booking.status };   // np. anulowana
-
-      let resourceId = booking.resource_id;
-      if (lapsed && booking.start_at) {
-        // płatność dotarła po wygaśnięciu holdu: potwierdzamy tylko, jeśli stanowisko (to albo inne) nadal jest wolne
-        const svc = await av.loadService(c, "id = $1", booking.service_id);
-        await lockResources(c, svc.resourceIds);
-        const duration = Math.round((booking.end_at - booking.start_at) / 60000);
-        const free = await av.resourcesFreeAt(c, svc, booking.start_at, duration, { excludeBooking: booking.id });
-        if (!free.length) {
+      if (lapsed && !booking.slot_id) {
+        seat = null;   // prośba o kontakt bez terminu – nie ma czego blokować
+      } else if (lapsed) {
+        // płatność dotarła po wygaśnięciu holdu: potwierdzamy tylko, jeśli miejsce nadal jest wolne
+        const { rows: [slot] } = await c.query("SELECT * FROM slots WHERE id = $1 FOR UPDATE", [booking.slot_id]);
+        seat = slot.blocked ? null : await freeSeatFor(c, slot);
+        if (seat === null) {
           console.warn("[płatność] zaliczka po wygaśnięciu holdu, termin zajęty – do zwrotu", booking.id);
-          if (booking.status === "pending_payment") await c.query("UPDATE bookings SET status = 'expired' WHERE id = $1", [booking.id]);
           return { status: "expired", needsRefund: true };
         }
-        resourceId = free.includes(resourceId) ? resourceId : free[0];
+      } else if (booking.status !== "pending_payment") {
+        return { status: booking.status };   // np. anulowana w międzyczasie
       }
       await c.query(
-        "UPDATE bookings SET status = 'confirmed', confirmed_at = now(), hold_expires_at = NULL, resource_id = $2 WHERE id = $1",
-        [booking.id, resourceId]);
+        "UPDATE bookings SET status = 'confirmed', confirmed_at = now(), hold_expires_at = NULL, seat = $2 WHERE id = $1",
+        [booking.id, seat]);
       await addNotification(c, booking.id, "booking_confirmed");
       return { status: "confirmed" };
     }
@@ -306,7 +215,7 @@ async function applyPaymentEvent(event) {
   });
 }
 
-/** Anulowanie przez admina. Termin wraca do puli (constraint i dostępność liczą tylko statusy aktywne). */
+/** Anulowanie przez admina. Termin wraca do puli (indeks liczy tylko statusy aktywne). */
 async function cancelBooking(id, by, reason) {
   const out = await tx(async (c) => {
     const { rows: [b] } = await c.query("SELECT * FROM bookings WHERE id = $1 FOR UPDATE", [id]);
@@ -334,16 +243,15 @@ async function cancelBooking(id, by, reason) {
   return { refund: out.refund };
 }
 
-const LOCAL_COLS = (col) => `to_char(${col} AT TIME ZONE '${TZ}', 'YYYY-MM-DD')`;
-const LOCAL_TIME = (col) => `to_char(${col} AT TIME ZONE '${TZ}', 'HH24:MI')`;
-
 /** Status rezerwacji dla strony potwierdzenia (id rezerwacji = losowy UUID, pełni rolę tokenu). */
 async function publicStatus(id) {
   const { rows: [r] } = await query(
     `SELECT b.id, ${EFFECTIVE_STATUS} AS status, b.hold_expires_at, b.customer_name, b.details, sv.name AS service_name, sv.slug, sv.uses_slots,
-            ${LOCAL_COLS("b.start_at")} AS date, ${LOCAL_TIME("b.start_at")} AS time, ${LOCAL_TIME("b.end_at")} AS time_end,
+            to_char(s.start_at AT TIME ZONE '${TZ}', 'YYYY-MM-DD') AS date,
+            to_char(s.start_at AT TIME ZONE '${TZ}', 'HH24:MI') AS time,
             p.id AS payment_id, p.status AS payment_status, p.amount, p.provider
        FROM bookings b JOIN services sv ON sv.id = b.service_id
+       LEFT JOIN slots s ON s.id = b.slot_id
        LEFT JOIN payments p ON p.id = b.payment_id
       WHERE b.id = $1`, [id]);
   return r || null;
@@ -354,11 +262,12 @@ async function paymentInfo(paymentId) {
     `SELECT p.id, CASE WHEN p.status = 'pending' AND ${EFFECTIVE_STATUS} = 'expired' THEN 'expired' ELSE p.status END AS status,
             p.amount, p.currency, p.provider, b.id AS booking_id, ${EFFECTIVE_STATUS} AS booking_status, b.hold_expires_at,
             sv.name AS service_name,
-            ${LOCAL_COLS("b.start_at")} AS date, ${LOCAL_TIME("b.start_at")} AS time, ${LOCAL_TIME("b.end_at")} AS time_end
+            to_char(s.start_at AT TIME ZONE '${TZ}', 'YYYY-MM-DD') AS date,
+            to_char(s.start_at AT TIME ZONE '${TZ}', 'HH24:MI') AS time
        FROM payments p JOIN bookings b ON b.id = p.booking_id JOIN services sv ON sv.id = b.service_id
+       LEFT JOIN slots s ON s.id = b.slot_id
       WHERE p.id = $1`, [paymentId]);
   return r || null;
 }
 
-module.exports = { createBooking, createManualBooking, rescheduleBooking, applyPaymentEvent, cancelBooking, listAvailable, listDays, expireHolds,
-  publicStatus, paymentInfo, SLOT_TAKEN, EFFECTIVE_STATUS };
+module.exports = { createBooking, applyPaymentEvent, cancelBooking, listAvailable, expireHolds, publicStatus, paymentInfo, SLOT_TAKEN };
