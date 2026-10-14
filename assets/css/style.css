@@ -79,6 +79,7 @@ table{border-collapse:collapse;width:100%}
 .btn--lg{min-height:54px;padding:14px 26px;font-size:1.05rem}
 .btn--block{width:100%}
 .btn[disabled]{opacity:.7;cursor:progress}
+.btn[aria-disabled="true"]{opacity:.6;pointer-events:none}
 
 /* ---------- Nagłówek ---------- */
 .hdr{position:sticky;top:0;z-index:50;background:rgba(255,255,255,.94);backdrop-filter:saturate(1.4) blur(10px);

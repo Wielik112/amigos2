@@ -52,7 +52,7 @@ W trybie `PAYMENTS_MODE=mock` cały przepływ działa bez kluczy: formularz → 
 
 - Formularz pobiera wolne godziny z `GET /api/terminy?usluga=…&dzien=RRRR-MM-DD` (tylko sloty niezablokowane, w przyszłości, z wolnym miejscem).
 - `POST /api/zapis` w transakcji blokuje wiersz slotu (`SELECT … FOR UPDATE`) i tworzy rezerwację. Dodatkowo częściowy indeks unikalny w bazie nie pozwala, żeby dwie aktywne rezerwacje zajęły to samo miejsce – przy równoczesnych żądaniach jedno przechodzi, drugie dostaje „Ten termin właśnie został zajęty”.
-- Usługa z zaliczką → status `pending_payment` i hold na 15 min (w trybie Stripe 30 min – minimum Stripe), potem przekierowanie do płatności. Bez zaliczki → od razu `confirmed`.
+- Usługa z zaliczką → status `pending_payment` i hold na 15 min (w trybie Stripe 30 min – minimum Stripe). Klient trafia najpierw na stronę **„Jeszcze jeden krok – zaliczka”** (`/zaliczka`): usługa, termin, kwota, odliczanie czasu, przyciski „Przejdź do płatności” i „Zrezygnuj” (rezygnacja od razu zwalnia termin). Bez zaliczki → od razu `confirmed`.
 - Rezerwację potwierdza wyłącznie zdarzenie płatności (webhook Stripe albo przycisk na stronie symulacji – obie drogi przechodzą przez tę samą funkcję `applyPaymentEvent`). Powrót klienta na stronę potwierdzenia niczego nie zmienia – strona tylko odpytuje status.
 - Wygasłe holdy nie blokują terminu (dostępność liczy tylko aktywne holdy); dodatkowo cron (`/api/cron`) porządkuje statusy. Na darmowym planie Vercel cron działa raz dziennie – to wystarcza, bo poprawność nie zależy od crona.
 - Daty w bazie są w UTC, wszystko na stronie i w panelu w czasie polskim (`Europe/Warsaw`, ze zmianą czasu).

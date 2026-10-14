@@ -975,6 +975,26 @@ def build_confirmation():
     return page("potwierdzenie", "Rezerwacja | Amigos Staweccy", "Status Twojej rezerwacji.", body, "", noindex=True)
 
 
+def build_deposit():
+    """Krok między formularzem a płatnością: termin już wstrzymany, klient widzi kwotę i sam przechodzi dalej."""
+    body = f'''<section class="phero phero--simple phero--center">
+<div class="wrap wrap--narrow" data-deposit>
+<h1 class="phero__h">Jeszcze jeden krok – zaliczka</h1>
+<p class="phero__lead" data-dp-lead>Termin jest już wstrzymany dla Ciebie. Żeby go potwierdzić, wpłać zaliczkę online.</p>
+</div></section>
+''' + result_card(f'''<dl data-dp-details hidden></dl>
+<ul class="ticks">
+<li>Płacisz BLIK-iem albo kartą na bezpiecznej stronie płatności Stripe.</li>
+<li>Rezerwacja jest potwierdzona dopiero po wpłacie – od razu zobaczysz potwierdzenie.</li>
+<li>Jeśli nie wpłacisz zaliczki w wyznaczonym czasie, termin wróci do puli.</li>
+</ul>
+<p data-dp-timer>Wczytuję szczegóły rezerwacji…</p>
+<div class="hero__cta"><a class="btn btn--red btn--lg" href="#" data-dp-pay aria-disabled="true">Przejdź do płatności</a><button class="btn btn--ghost btn--lg" type="button" data-dp-cancel disabled>Zrezygnuj</button></div>
+<p class="bform__msg" role="alert" hidden data-dp-msg></p>
+<p>Masz pytanie? Zadzwoń: <a href="tel:{tel(MAIN_PHONE)}">{MAIN_PHONE}</a>.</p>''')
+    return page("zaliczka", "Zaliczka | Amigos Staweccy", "Wpłata zaliczki za rezerwację.", body, "", noindex=True)
+
+
 def build_payment_failed():
     body = f'''<section class="phero phero--simple phero--center">
 <div class="wrap wrap--narrow" data-booking-failed>
@@ -1137,7 +1157,7 @@ def write(name, content):
         fh.write(content)
 
 
-NOINDEX_PAGES = ("404", "dziekujemy", "potwierdzenie", "platnosc-nieudana", "platnosc/mock")
+NOINDEX_PAGES = ("404", "dziekujemy", "potwierdzenie", "zaliczka", "platnosc-nieudana", "platnosc/mock")
 
 
 def build_meta(paths):
@@ -1177,7 +1197,7 @@ def api_form_schema(s):
 
 if __name__ == "__main__":
     out = [build_home(), build_uslugi(), build_rezerwacja(), build_kontakt(), build_privacy(), build_thanks(), build_404(),
-           build_confirmation(), build_payment_failed(), build_mock_payment()]
+           build_confirmation(), build_deposit(), build_payment_failed(), build_mock_payment()]
     out += [build_service(s) for s in SERVICES]
     build_meta(out)
     build_admin()

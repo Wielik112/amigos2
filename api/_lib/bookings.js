@@ -141,7 +141,7 @@ async function createBooking(data) {
   // Wywołanie dostawcy poza transakcją – nie trzymamy blokady slotu w czasie żądania do Stripe.
   try {
     const out = await provider.createPayment({ booking, payment, service: svc, slot });
-    await query("UPDATE payments SET provider_ref = $2, updated_at = now() WHERE id = $1", [payment.id, out.providerRef]);
+    await query("UPDATE payments SET provider_ref = $2, redirect_url = $3, updated_at = now() WHERE id = $1", [payment.id, out.providerRef, out.redirectUrl]);
     return { booking, status: booking.status, redirectUrl: out.redirectUrl, paymentId: payment.id };
   } catch (e) {
     console.error("[rezerwacja] nie udało się utworzyć płatności", e.message);
@@ -249,7 +249,7 @@ async function publicStatus(id) {
     `SELECT b.id, ${EFFECTIVE_STATUS} AS status, b.hold_expires_at, b.customer_name, b.details, sv.name AS service_name, sv.slug, sv.uses_slots,
             to_char(s.start_at AT TIME ZONE '${TZ}', 'YYYY-MM-DD') AS date,
             to_char(s.start_at AT TIME ZONE '${TZ}', 'HH24:MI') AS time,
-            p.id AS payment_id, p.status AS payment_status, p.amount, p.provider
+            p.id AS payment_id, p.status AS payment_status, p.amount, p.provider, p.redirect_url
        FROM bookings b JOIN services sv ON sv.id = b.service_id
        LEFT JOIN slots s ON s.id = b.slot_id
        LEFT JOIN payments p ON p.id = b.payment_id

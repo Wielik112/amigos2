@@ -4,7 +4,8 @@
  *  GET  status?id=<bookingId>   status rezerwacji dla strony /potwierdzenie (odpytywana, bo webhook może przyjść po powrocie klienta)
  *  GET  info?id=<paymentId>     dane płatności dla strony symulacji /platnosc/mock/<paymentId>
  *  POST mock                    „webhook” trybu mock: { paymentId, wynik: "zaplac" | "anuluj" } -> applyPaymentEvent()
- *  POST anuluj { id }           klient zrezygnował na stronie płatności – zamykamy sesję u dostawcy (Stripe wyśle checkout.session.expired)
+ *  POST anuluj { id }           klient zrezygnował (strona /zaliczka albo powrót ze Stripe): płatność wygasa, termin wraca do puli,
+ *                               a sesja Stripe jest zamykana
  */
 const { applyPaymentEvent, publicStatus, paymentInfo } = require("./_lib/bookings");
 const { getProviderByName } = require("./_lib/payments");
@@ -25,7 +26,9 @@ module.exports = handler(async (req, res) => {
     return sendJson(res, 200, { ok: true, rezerwacja: {
       status: r.status, usluga: r.service_name, data: r.date || (r.details && r.details.data) || null, godzina: r.time,
       pora: r.details && r.details.pora, kontakt: !r.uses_slots, imie: r.customer_name, slug: r.slug,
-      holdDo: r.hold_expires_at, platnosc: r.payment_id ? { status: r.payment_status, kwota: r.amount, dostawca: r.provider } : null,
+      holdDo: r.hold_expires_at, platnosc: r.payment_id ? { status: r.payment_status, kwota: r.amount, dostawca: r.provider,
+        // adres płatności tylko, dopóki termin czeka na wpłatę
+        url: r.status === "pending_payment" && r.payment_status === "pending" ? r.redirect_url : null } : null,
     } });
   }
 
@@ -63,6 +66,8 @@ module.exports = handler(async (req, res) => {
       `SELECT p.* FROM bookings b JOIN payments p ON p.id = b.payment_id
         WHERE b.id = $1 AND b.status = 'pending_payment' AND p.status = 'pending'`, [id]);
     if (p) {
+      // rezygnacja = płatność się nie odbyła: ta sama logika co wygaśnięcie sesji, termin od razu wraca do puli
+      await applyPaymentEvent({ provider: p.provider, eventId: null, type: "expired", paymentId: p.id, providerRef: p.provider_ref });
       const provider = getProviderByName(p.provider);
       if (provider && provider.cancel) await provider.cancel(p);
     }
